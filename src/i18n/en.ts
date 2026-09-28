@@ -314,6 +314,8 @@ export const en: Dict = {
     process_pid_reused: "PID {pid} was reused by another process — rescan",
     process_plan_requires_blocking:
       "Process plans must run on the blocking channel",
+      process_termination_unsupported:
+        "The App Store build runs in the system sandbox and cannot terminate other apps. Use the Developer ID build, or clean caches and app leftovers inside the app.",
     process_protection_changed:
       "The protection state changed (PID {pid}) — rescan",
     protected_force_only: "Protected processes can only be force-terminated",

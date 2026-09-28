@@ -256,7 +256,14 @@ fn each_file_constructs_exactly_its_declared_codes() {
         ),
         (
             "lib.rs",
-            &["process_execution_failed", "residue_scan_failed"],
+            // `process_termination_unsupported` 只在 `--features mas` 下真正被
+            // 构造（默认形态那段被 cfg 掉了），但清单是形态无关的静态断言，
+            // 所以照样要列在这里。
+            &[
+                "process_execution_failed",
+                "process_termination_unsupported",
+                "residue_scan_failed",
+            ],
         ),
         (
             "operation_commands.rs",

@@ -110,6 +110,18 @@ impl ErrorCode {
     pub const RESIDUE_SCAN_FAILED: Self = Self("residue_scan_failed");
     pub const MOVE_TO_TRASH_FAILED: Self = Self("move_to_trash_failed");
 
+    // ===== 构建形态差异 =====
+    /// Mac App Store 版不支持终止进程。
+    ///
+    /// App Sandbox 下沙箱进程不能给其他进程发信号，且**没有任何 entitlement
+    /// 能放行**这一项。所以 MAS flavor 在进入 signaller 之前就直接拒绝，
+    /// 而不是让 `kill(2)` 撞 EPERM 抛一个「权限不足」—— 后者会让用户以为
+    /// 是自己的系统设置有问题，而真实原因是这个构建形态压根没有该能力。
+    ///
+    /// 文案只在前端词典里（`error.process_termination_unsupported`），
+    /// Rust 侧不抄译文。
+    pub const PROCESS_TERMINATION_UNSUPPORTED: Self = Self("process_termination_unsupported");
+
     // ===== 缓存清理 =====
     pub const CACHE_SELECTION_COUNT_MISMATCH: Self = Self("cache_selection_count_mismatch");
     pub const CACHE_BUSY_APP_SKIPPED: Self = Self("cache_busy_app_skipped");
@@ -207,6 +219,7 @@ impl ErrorCode {
         Self::KILL_STILL_ALIVE,
         Self::KILL_TERMINATED,
         Self::MOVE_TO_TRASH_FAILED,
+        Self::PROCESS_TERMINATION_UNSUPPORTED,
         Self::NO_DOCKER_TARGETS,
         Self::NO_QUITTABLE_APP_TARGETS,
         Self::NO_TERMINABLE_PROCESS_TARGETS,

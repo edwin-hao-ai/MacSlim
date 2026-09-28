@@ -11,6 +11,19 @@ default-run = "macslim"
 name = "macslim_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# ===== 构建形态 =====
+#
+# 默认（不写 `--features mas`）= Developer ID / 公证全功能版。
+# `mas` = Mac App Store 版，走 App Sandbox，可用能力更少。
+#
+# 目前 `mas` 唯一的行为差异是**拒绝终止进程**
+# （`lib.rs` 里 `#[cfg(feature = "mas")]` 那道守卫）：App Sandbox 下沙箱进程
+# 不能给其他进程发信号，且没有任何 entitlement 能放行。其余能力
+# （Docker 探测等）在沙箱下会自然降级 —— 见 docs/dual-release-decision.md。
+[features]
+default = []
+mas = []
+
 [[bin]]
 name = "macslim"
 path = "src/main.rs"

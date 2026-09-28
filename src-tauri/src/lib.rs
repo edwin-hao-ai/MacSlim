@@ -241,7 +241,12 @@ async fn execute_operation(
 
 async fn run_operation_plan(
     plan: operations::ConsumedPlan,
-    policy: impl Fn(&str) -> bool + Send + Sync + 'static,
+    // MAS 形态下下面那道守卫会直接返回，`policy` 根本用不到；不加这个属性
+    // 的话 `--features mas` 的构建会带一个 unused-variable 警告。
+    #[cfg_attr(feature = "mas", allow(unused_variables))] policy: impl Fn(&str) -> bool
+        + Send
+        + Sync
+        + 'static,
     domains: &operation_executor::DomainServices<
         '_,
         operation_executor::SystemCacheCleaner,
@@ -253,6 +258,23 @@ async fn run_operation_plan(
     if !plan.kind().is_termination() {
         return operation_executor::execute_domain_plan(plan, domains).await;
     }
+    // MAS 构建形态不支持终止进程，见 ErrorCode::PROCESS_TERMINATION_UNSUPPORTED
+    // 的注释：沙箱禁止沙箱进程给其他进程发信号，且无 entitlement 可放行。
+    //
+    // 放在这里（进入 signaller 之前）而不是让 kill(2) 去撞 EPERM —— 后者会报成
+    // 「权限不足」，让用户以为是系统设置问题，而真实原因是这个构建压根没这能力。
+    //
+    // 注意这只是**构建形态的能力差异**，不是安全判定：判断依据是编译期的
+    // `feature = "mas"`，不掺任何文案、快照或用户输入。
+    #[cfg(feature = "mas")]
+    {
+        return Err(UserError::with(
+            ErrorCode::PROCESS_TERMINATION_UNSUPPORTED,
+            "App Store 版运行在系统沙箱内，不能终止其他进程",
+            vec![],
+        ));
+    }
+    #[cfg(not(feature = "mas"))]
     tauri::async_runtime::spawn_blocking(move || {
         let mut observer = process_ops::SystemProcessObserver::with_policy(policy);
         let mut signaller = process_ops::SystemProcessSignaller;
@@ -330,16 +352,31 @@ fn setup_app(
 pub fn run() {
     let storage = Arc::new(Storage::open().expect("无法初始化存储"));
 
-    tauri::Builder::default()
+    // MAS 形态下 updater 插件不注册，`builder` 之后不再被重新赋值，所以这里
+    // 也不需要 `mut`。
+    #[cfg_attr(feature = "mas", allow(unused_mut))]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
-        ))
+        ));
+
+    // MAS 走 App Store 更新（用户从 App Store 升级），自更新插件整块不注册；
+    // capability/mas.json 里对应的两条 updater 权限也一并去掉，两边保持一致。
+    //
+    // 必须写成独立的 `cfg` 块再重新赋值，不能在方法链中间挂 `#[cfg]` ——
+    // 属性只能加在 item 上，加在 `.plugin(...)` 这种表达式位置编译不过
+    // （`error: expected ';', found '#'`）。
+    #[cfg(not(feature = "mas"))]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    builder
         .setup(move |app| setup_app(app, storage.clone()))
         .on_window_event(|window, event| {
             // 点 X 关闭 → 不退出应用，只把窗口藏起来，托盘保持驻留

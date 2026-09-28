@@ -291,6 +291,7 @@ export const zhCN = {
     process_pid_reused: "PID {pid} 已被其他进程复用，请重新扫描",
     process_plan_requires_blocking: "进程操作必须通过阻塞执行通道",
     process_protection_changed: "进程保护状态已变化（PID {pid}），请重新扫描",
+    process_termination_unsupported: "App Store 版受系统沙箱限制，无法终止其他进程。请用 Developer ID 版，或在应用内清理缓存与应用残留。",
     protected_force_only: "受保护进程只能强制终止",
     random_id_failed: "生成随机 ID 失败",
     refuse_symlink: "拒绝清理符号链接：{reason}",
