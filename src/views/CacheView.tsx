@@ -104,6 +104,13 @@ const CacheView: Component = () => {
   const [displayFreedBytes, setDisplayFreedBytes] = createSignal(0);
   const [showFlash, setShowFlash] = createSignal(false);
   const [pending, setPending] = createSignal<PreparedOperation | null>(null);
+  // prepare 阶段（点「清理」→ 确认弹窗弹出）的 loading。
+  //
+  // 为什么要单独一个 signal：这一段实测要 14~21 秒（prepareOperation 要对每个
+  // 选中项真实 dry-run 测一遍体积，15 项就是 15 次目录树遍历）。而 `cleaning()`
+  // 只覆盖 execute 阶段。没它的话，用户点完「清理」要盯着一个**什么都不变**的
+  // 界面等二十秒 —— 报告里被当成「点清理没反应」。
+  const [preparing, setPreparing] = createSignal(false);
   const [stageCurrent, setStageCurrent] = createSignal<string | null>(null);
   const [stageDone, setStageDone] = createSignal(0);
   const [stageFound, setStageFound] = createSignal(0);
@@ -207,15 +214,18 @@ const CacheView: Component = () => {
     const keys = selectedKeys();
     if (!current || keys.length === 0) return;
     setError(null);
+    // 破坏性动作先停在 prepare：把后端算好的摘要与估算交给用户确认，
+    // 用户点了确认才 execute（AGENTS.md §4.1 / §4.5）。
+    setPreparing(true);
     try {
-      // 破坏性动作先停在 prepare：把后端算好的摘要与估算交给用户确认，
-      // 用户点了确认才 execute（AGENTS.md §4.1 / §4.5）。
       setPending(
         await prepareOperation(cacheOperation(current.snapshot_id, keys)),
       );
     } catch (e) {
       showError(e);
       await runScan();
+    } finally {
+      setPreparing(false);
     }
   };
 
@@ -510,11 +520,13 @@ const CacheView: Component = () => {
           class="btn-primary gap-2 min-w-[220px] clean-cta"
           classList={{
             "clean-cta--armed":
-              !cleaning() && !scanning() && selected().size > 0 && selectedBytes() > 0,
-            "clean-cta--busy": cleaning(),
+              !cleaning() && !preparing() && !scanning()
+              && selected().size > 0 && selectedBytes() > 0,
+            "clean-cta--busy": cleaning() || preparing(),
           }}
           disabled={
             cleaning() ||
+            preparing() ||
             scanning() ||
             selected().size === 0 ||
             selectedBytes() === 0
@@ -522,20 +534,24 @@ const CacheView: Component = () => {
           onClick={() => void requestClean()}
         >
           <Show
-            when={!cleaning()}
+            when={!cleaning() && !preparing()}
             fallback={<Loader2 size={16} class="animate-spin" />}
           >
             <Sparkles size={16} />
           </Show>
-          {t("cache.cleanCta", {
-            size: fmtBytes(selectedBytes()),
-            count: selected().size,
-          })}
+          <Show when={preparing()}>
+            {t("cache.preparingCta")}
+          </Show>
+          <Show when={!preparing()}>
+            {t("cache.cleanCta", {
+              size: fmtBytes(selectedBytes()),
+              count: selected().size,
+            })}
+          </Show>
         </button>
-
         <button
           type="button"
-          class="btn-ghost gap-2"
+          class="btn-ghost gap-2 shrink-0"
           disabled={scanning() || cleaning()}
           onClick={runScan}
         >
@@ -548,8 +564,11 @@ const CacheView: Component = () => {
           {t("common.rescan")}
         </button>
 
-        <span class="ml-auto text-[11px] text-zinc-400">
-          {t("common.notice_irreversible")}
+        {/* prepare 期间用说明文字换掉「不可撤销」提示，而不是在按钮旁边另加一条：
+            这一行总宽只有 ~700px，额外插入文案会把「重新扫描」和提示都挤到换行
+            （实测过一次，很难看）。两者都是同一位置的辅助说明，互斥显示即可。 */}
+        <span class="ml-auto text-[11px] text-zinc-400 whitespace-nowrap">
+          {preparing() ? t("cache.preparingHint") : t("common.notice_irreversible")}
         </span>
       </div>
 

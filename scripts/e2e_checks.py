@@ -31,48 +31,72 @@ from e2e_registry import (  # noqa: E402  供检查函数直接使用
 
 P_MAIN = drv.P_MAIN
 
+# 读主视图直接子节点时的上限。**不能设小**：OperationConfirm 挂在组件树末尾，
+# 实测缓存页弹窗的「取消 / 确认执行」落在第 39 / 40 号子节点上，而清理页主视图
+# 本来就有 30+ 个子节点。cap=24 时按钮整片读不到，于是
+# `_wait_for_confirm_dialog` 永远返回 False、`_find_cancel_button` 永远返回 None，
+# 报出来的是「确认弹窗没有同时出现取消和确认执行」—— 一个假的症状，把排查
+# 方向全带到「弹窗没渲染」上去。
+AX_CAP = 90
+
 # ============ 公共小工具 ============
 
 
 def _cache_item_rows(app: App) -> list[tuple[str, drv.AxNode, str]]:
     """扫出缓存页所有条目：`(路径, 复选框节点, 名字)`。
 
-    缓存页的实测层级（`CacheView.tsx` → `.card` 分组 → 逐条 `.card` 条目）：
+    缓存页的实测 AX 层级是**两层嵌套**（`CacheView.tsx` → 分组 `.card` → 条目
+    `.card` → 条目内层 div）：
 
     ```
-    P_MAIN 的第 N 个子节点  AXGroup 610x70      ← 一个条目
-      ├ 1 AXCheckBox  16x16   @309  ← 要点的就是这个
-      ├ 2 AXStaticText        名字
-      ├ 3 AXGroup → AXStaticText 描述
-      └ 4 AXGroup → AXStaticText 路径   ← 用来定位是哪个条目
+    P_MAIN 的第 N 个子节点  AXGroup 610x70     ← 一个条目（高固定 70）
+      └ 1 AXGroup 610x70                      ← 条目内层 div
+          ├ 1 AXCheckBox  16x16  @309  ← 要点的就是这个（在**第 2 层**）
+          ├ 2 AXStaticText       名字
+          ├ 3 AXGroup → AXStaticText 描述
+          └ 4 AXGroup → AXStaticText 路径   ← 用来定位是哪个条目
     ```
 
-    分组容器本身是更大的 AXGroup（`610x144` / `610x958`，高 = 条目数 × 74），
-    里面是逐个条目。所以判据是**高度在 60~90 且宽约 610** —— 分组容器宽相同
-    但高得多（958），条目高固定 70。
+    两个坑都踩过：
+
+    1. 分组容器本身也是 `610` 宽的 AXGroup（`610x144` / `610x958`，高 = 条目数
+       × 74）。所以条目判据是**高 60~90**，只看宽会把分组容器也当成条目。
+    2. 复选框在**第 2 层**。只扫条目组的直接子节点会一个都找不到（实测返回
+       空列表），因为直接子节点只有那个内层 group。
     """
     rows: list[tuple[str, drv.AxNode, str]] = []
     for group in app.ax.children(P_MAIN, cap=80):
         if group.role != "AXGroup" or not (60 <= group.h <= 90 and group.w >= 400):
             continue
-        kids = app.ax.children(group.path, cap=8)
-        box = next((k for k in kids if k.role == "AXCheckBox"), None)
-        if box is None:
-            continue
-        name = next(
-            (k.value for k in kids if k.role == "AXStaticText" and k.value and k.y < group.y + 40),
-            "",
-        )
-        path = ""
-        for child in kids:
-            if child.role != "AXGroup" or child.y < group.y + 40:
+        for inner in app.ax.children(group.path, cap=4):
+            if inner.role != "AXGroup":
                 continue
+            box = next(
+                (k for k in app.ax.children(inner.path, cap=8) if k.role == "AXCheckBox"),
+                None,
+            )
+            if box is not None:
+                path, name = _item_texts(app, inner)
+                rows.append((path, box, name))
+                break
+    return rows
+
+
+def _item_texts(app: App, inner: drv.AxNode) -> tuple[str, str]:
+    """取条目内层 div 的 `(路径, 名字)`。
+
+    路径是绝对路径、必定以 `/` 开头；名字是剩下的那条文本（短、不是描述）。
+    """
+    name = ""
+    path = ""
+    for child in app.ax.children(inner.path, cap=8):
+        if child.role == "AXStaticText" and child.value:
+            name = name or child.value
+        elif child.role == "AXGroup":
             text = _group_text(app, child)
             if text.startswith("/"):
-                path = text
-                break
-        rows.append((path, box, name))
-    return rows
+                path = path or text
+    return (path, name)
 
 
 def _find_cache_item_checkbox(app: App, target: Path) -> drv.AxNode:
@@ -85,6 +109,31 @@ def _find_cache_item_checkbox(app: App, target: Path) -> drv.AxNode:
     raise SkipCheck(
         f"自造目录没出现在缓存条目里：{target}。\n"
         f"读到的条目（前 8 个）：{known}"
+    )
+
+
+def _ensure_first_item_checked(app: App) -> None:
+    """确保第一个可勾选的缓存项处于勾选态。
+
+    缓存项**默认就是勾上的**（AGENTS.md §4.3：默认选中 = 重新获取成本 < 5 分钟），
+    所以先看当前值，只在未勾时才按 —— 无脑按一下等于把它取消掉。第 1 项首次跑时
+    就是这么把目标取消掉的，报「点击后复选框仍是 unchecked」，方向全错。
+    """
+    box = _first_enabled_checkbox(app)
+    if box.value.strip() != "1":
+        if not app.ax.press(box.path, why="勾选第一个缓存项"):
+            raise SkipCheck(f"AXPress 勾选失败：{box.describe()}")
+    _wait_checked(app, box)
+
+
+def _first_enabled_checkbox(app: App) -> drv.AxNode:
+    """第一个可勾选的缓存条目复选框。"""
+    for _path, box, _name in _cache_item_rows(app):
+        if not box.disabled:
+            return box
+    raise SkipCheck(
+        "没有可勾选的缓存条目（可能扫不到任何 ≥5MB 缓存）。"
+        f"读到的条目：{[f'{p}[{n}]' for p, _b, n in _cache_item_rows(app)][:8]}"
     )
 
 
@@ -148,7 +197,7 @@ def _freeze_process_list(app: App) -> None:
 
 def _process_search_box(app: App) -> AxNode:
     """进程搜索框：main 子节点里 220x34 的 AXTextField。不写死坐标，按形状现读。"""
-    for node in app.ax.children(P_MAIN, cap=24):
+    for node in app.ax.children(P_MAIN, cap=AX_CAP):
         if node.role == "AXGroup" and 200 <= node.w <= 240 and 24 <= node.h <= 44:
             inner = app.ax.node(P_MAIN + (node.index, 1), fresh=True)
             if inner.role == "AXTextField":
@@ -516,10 +565,7 @@ def check_01(app: App) -> CheckResult:
     app.nav("缓存清理")
     app.wait_heading("缓存清理")
     shot0 = app.screenshot("cache-01-before")
-    box = _first_enabled_checkbox(app)
-    if not app.ax.press(box.path, why="勾选第一个缓存项"):
-        raise SkipCheck(f"AXPress 勾选失败：{box.describe()}")
-    _wait_checked(app, box)
+    _ensure_first_item_checked(app)
     shot1 = app.screenshot("cache-01-checked")
     clean = app.ax.main_button("清理 ")
     if clean is None or clean.disabled:
@@ -531,10 +577,9 @@ def check_01(app: App) -> CheckResult:
     if not _wait_for_confirm_dialog(app):
         raise SkipCheck(
             "确认弹窗没有同时出现「取消」和「确认执行」。"
-            f"当前按钮：{[n.title for n in app.ax.children(P_MAIN, cap=24) if n.role == 'AXButton']}"
+            f"当前按钮：{[n.title for n in app.ax.children(P_MAIN, cap=AX_CAP) if n.role == 'AXButton']}"
         )
-    dialog = [n.value for n in app.ax.children(P_MAIN, cap=24)
-              if n.role == "AXStaticText" and n.value]
+    dialog = _confirm_dialog_texts(app)
     shot2 = app.screenshot("cache-01-confirm")
     flags = _assert_confirm_dialog_three_elements(dialog)
     if not _press_and_settle(app, "取消"):
@@ -616,7 +661,7 @@ def check_02(app: App) -> CheckResult:
         if not _wait_for_confirm_dialog(app):
             raise SkipCheck(
                 "确认弹窗没出现。"
-                f"当前按钮：{[n.title for n in app.ax.children(P_MAIN, cap=24) if n.role == 'AXButton']}"
+                f"当前按钮：{[n.title for n in app.ax.children(P_MAIN, cap=AX_CAP) if n.role == 'AXButton']}"
             )
         rows_before = drv.history_count()
         go = _find_confirm_button(app)
@@ -867,6 +912,43 @@ def _advance_to_confirm(app: App, why: str) -> drv.AxNode:
     return confirm
 
 
+def _confirm_dialog_texts(app: App) -> list[str]:
+    """收集 `OperationConfirm` 弹窗里的全部文本。
+
+    弹窗的三要素（项目数 / 预计释放 / 有效期）都排在**按钮之前、且包在 group 里**，
+    不是主视图的直接 AXStaticText 子节点。所以要从「取消」按钮那个下标往回扫，
+    逐个 group 下钻一层取文本。
+
+    为什么从「取消」下标往回、而不是从头扫：弹窗是组件树里最后挂上来的，直接子
+    节点下标最高（实测 39/40），前面 30 多个是缓存列表本身，深扫又慢又没意义。
+    """
+    cancel = _find_cancel_button(app)
+    if cancel is None:
+        return []
+    kids = app.ax.children(P_MAIN, cap=AX_CAP)
+    start = max(0, next((i for i, k in enumerate(kids) if k.index == cancel.index), 0) - 8)
+    texts: list[str] = []
+    for node in kids[start:]:
+        if node.role == "AXStaticText" and node.value:
+            texts.append(node.value)
+        elif node.role == "AXGroup" and node.index <= cancel.index:
+            texts.extend(_group_texts(app, node))
+    return texts
+
+
+def _group_texts(app: App, group: drv.AxNode, depth: int = 3) -> list[str]:
+    """递归收集一个 group 子树里的静态文本（深度有限，避免爆预算）。"""
+    if depth <= 0:
+        return []
+    found: list[str] = []
+    for child in app.ax.children(group.path, cap=10):
+        if child.role == "AXStaticText" and child.value:
+            found.append(child.value)
+        elif child.role == "AXGroup":
+            found.extend(_group_texts(app, child, depth - 1))
+    return found
+
+
 def _wait_for_confirm_dialog(app: App, timeout: float = 12.0) -> bool:
     """等 `OperationConfirm` 弹窗挂上。
 
@@ -878,7 +960,7 @@ def _wait_for_confirm_dialog(app: App, timeout: float = 12.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         titles = {
-            n.title for n in app.ax.children(P_MAIN, cap=24) if n.role == "AXButton"
+            n.title for n in app.ax.children(P_MAIN, cap=AX_CAP) if n.role == "AXButton"
         }
         if "取消" in titles and any(t.startswith("确认") for t in titles):
             return True
@@ -912,7 +994,7 @@ def _find_confirm_button(app: App) -> drv.AxNode | None:
     文案是 `opConfirm.confirm`（实测「确认执行」），大体积二次确认时另有文案。
     两条路径都试 —— 谁在且可点就用谁。
     """
-    for node in app.ax.children(P_MAIN, cap=24):
+    for node in app.ax.children(P_MAIN, cap=AX_CAP):
         if node.role == "AXButton" and node.title.startswith("确认") and not node.disabled:
             return node
     return None
@@ -920,7 +1002,7 @@ def _find_confirm_button(app: App) -> drv.AxNode | None:
 
 def _find_cancel_button(app: App) -> drv.AxNode | None:
     """确认弹窗里的「取消」。"""
-    for node in app.ax.children(P_MAIN, cap=24):
+    for node in app.ax.children(P_MAIN, cap=AX_CAP):
         if node.role == "AXButton" and node.title == "取消" and not node.disabled:
             return node
     return None

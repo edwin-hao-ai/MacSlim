@@ -396,6 +396,8 @@ export const en: Dict = {
     cleaningStage: "Reclaiming space",
     cleaningLive: "Cleaning {count} items, reclaiming up to {size}",
     cleanCta: "Clean {size} ({count})",
+    preparingCta: "Calculating…",
+    preparingHint: "Measuring actual reclaimable space item by item — takes ~15s with many items",
     clean: "Clean",
     cleanSuccess: "Cleanup complete — freed {size}",
     cleanSuccessDetail: "{count} succeeded, {failed} failed",

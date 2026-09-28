@@ -359,6 +359,8 @@ export const zhCN = {
     cleaningStage: "正在释放空间",
     cleaningLive: "正在清理 {count} 项，预计释放 {size}",
     cleanCta: "清理 {size} ({count})",
+    preparingCta: "正在核算…",
+    preparingHint: "正在逐项测算实际可释放空间，缓存项多时需要十几秒",
     clean: "清理",
     cleanSuccess: "清理完成，释放 {size}",
     cleanSuccessDetail: "成功 {count} 项，失败 {failed} 项",

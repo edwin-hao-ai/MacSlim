@@ -593,13 +593,20 @@ describe("CacheView scan stage progress", () => {
     // 从这里起只看重入的那两个句柄
     handles.length = 0;
 
+    // 重入路径变了：加了 prepare 阶段 loading 之后，「清理」在 prepare 挂起期间
+    // 是 disabled 的，连点两次进不去第二条 prepare。新的可达路径是**「清理」
+    // 挂起期间点「重新扫描」**：那一刻 scanning 还是 false，重新扫描按钮可点；
+    // 扫描一开始它又被禁用，于是制造不出第二次 —— 要制造重叠只能靠
+    // prepare 失败时自动发起的 runScan。
     fireEvent.click(screen.getByText("cache.cleanCta"));
-    fireEvent.click(screen.getByText("cache.cleanCta"));
-    expect(pendingPrepares.length).toBe(2);
+    expect(pendingPrepares.length).toBe(1);
+    // 按钮确实进了 loading 态：文案切到「正在核算」且 disabled
+    const cta = screen.getByText("cache.preparingCta").closest("button");
+    expect(cta?.hasAttribute("disabled")).toBe(true);
 
+    fireEvent.click(screen.getByText("common.rescan"));
+    // prepare 失败 → 自动 runScan，与上面那次扫描重叠
     pendingPrepares[0]("快照不存在或已失效");
-    await waitFor(() => expect(handles.length).toBe(1));
-    pendingPrepares[1]("快照不存在或已失效");
     await waitFor(() => expect(handles.length).toBe(2));
 
     // 两次扫描都还挂着：一个句柄都不该被解绑
