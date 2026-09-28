@@ -110,6 +110,25 @@ python3 scripts/updater_artifact.py rebuild \
   --archive "$UPDATER_PATH" \
   --target "$RUST_TARGET"
 
+# 6. 给重建后的 updater 归档补签
+#
+# 顺序上这是必须的：脚本开头 `rm -f` 掉了 tauri 自己产出的 `.sig`，随后
+# `updater_artifact.py rebuild` 又重新打了 tar 归档 —— 归档内容变了，tauri 那个
+# 签名立刻作废。**必须重建完再签，顺序不能反**（先签后重建同样会失效）。
+# 漏掉这一步的话，`scripts/publish-update.sh:335` 会报「缺少 updater 签名」，
+# 而 release.sh 本身一路绿灯，看起来一切正常。
+echo "==> 签署 updater 归档..."
+SIGNING_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+if [ -n "$SIGNING_PASSWORD" ] || [ -f "$HOME/.tauri/macflow-updater.key" ]; then
+  bunx tauri signer sign "$UPDATER_PATH" >/dev/null
+fi
+if [ ! -s "$UPDATER_SIG_PATH" ]; then
+  echo "错误: updater 归档签名未生成（$UPDATER_SIG_PATH 缺失或为空）" >&2
+  echo "      请检查 TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD" >&2
+  exit 1
+fi
+echo "    签名: $UPDATER_SIG_PATH"
+
 echo ""
 echo "✅ Release 完成"
 echo "   DMG: $DMG_PATH"
