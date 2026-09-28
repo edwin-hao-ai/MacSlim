@@ -1,59 +1,72 @@
 #!/usr/bin/env bash
 # 手动对已打包好的 .app / DMG 签名 + notarize
 # 用法：./scripts/sign.sh [arm|intel|universal]
-#
-# 背景：Apple 的 timestamp.apple.com 服务会间歇性不可用，导致 Tauri 一体化
-# 构建中断。这个脚本把「编译」和「签名+公证」拆开，失败可单独重跑签名。
 
 set -euo pipefail
 
 TARGET="${1:-arm}"
+VERSION="$(python3 -c 'import json, pathlib; print(json.loads(pathlib.Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"])')"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "错误: tauri.conf.json 中的 version 无效" >&2
+  exit 1
+fi
 TEAM_ID="5XNDF727Y6"
-SIGNING_ID="Developer ID Application: Beijing VGO Co;Ltd (${TEAM_ID})"
-PROFILE_NAME="macflow-notary"  # keychain profile 名沿用旧的，避免重新 store-credentials
+SIGNING_ID="${APPLE_SIGNING_IDENTITY:-Developer ID Application: Beijing VGO Co;Ltd (${TEAM_ID})}"
+PROFILE_NAME="${MACSlim_NOTARY_PROFILE:-macslim-notary}"
 ENTITLEMENTS="src-tauri/entitlements.plist"
 
 case "$TARGET" in
-  arm)       RUST_TARGET="aarch64-apple-darwin" ;;
-  intel)     RUST_TARGET="x86_64-apple-darwin" ;;
-  universal) RUST_TARGET="universal-apple-darwin" ;;
-  *) echo "用法: $0 [arm|intel|universal]"; exit 1 ;;
+  arm)
+    RUST_TARGET="aarch64-apple-darwin"
+    ARCH="aarch64"
+    ;;
+  intel)
+    RUST_TARGET="x86_64-apple-darwin"
+    ARCH="x64"
+    ;;
+  universal)
+    RUST_TARGET="universal-apple-darwin"
+    ARCH="universal"
+    ;;
+  *) echo "用法: $0 [arm|intel|universal]" >&2; exit 1 ;;
 esac
 
 APP_PATH="src-tauri/target/${RUST_TARGET}/release/bundle/macos/MacSlim.app"
-DMG_PATH=$(ls src-tauri/target/${RUST_TARGET}/release/bundle/dmg/MacSlim_*.dmg 2>/dev/null | head -1 || true)
+DMG_PATH="src-tauri/target/${RUST_TARGET}/release/bundle/dmg/MacSlim_${VERSION}_${ARCH}.dmg"
+UPDATER_PATH="src-tauri/target/${RUST_TARGET}/release/bundle/macos/MacSlim.app.tar.gz"
+UPDATER_SIG_PATH="${UPDATER_PATH}.sig"
+UPDATER_STAMP_PATH="${UPDATER_PATH}.build-stamp.json"
+APP_ARCHIVE_PATH="${APP_PATH}.zip"
+rm -f "$UPDATER_PATH" "$UPDATER_SIG_PATH" "$UPDATER_STAMP_PATH"
 
 if [ ! -d "$APP_PATH" ]; then
-  echo "错误: 找不到 $APP_PATH，请先跑 bun run tauri build --target $RUST_TARGET"
+  echo "错误: 找不到 $APP_PATH，请先跑 bun run tauri build --target $RUST_TARGET" >&2
   exit 1
 fi
 
-# 探测 Apple timestamp 服务
-TIMESTAMP_FLAG="--timestamp"
-if ! codesign --force --options runtime --timestamp \
-     --sign "$SIGNING_ID" \
-     "$APP_PATH/Contents/MacOS/macslim" >/dev/null 2>&1; then
-  echo "⚠️  timestamp.apple.com 不可用，使用无时间戳签名（无法通过公证，但本地可用）"
-  TIMESTAMP_FLAG="--timestamp=none"
+if [ ! -f "$DMG_PATH" ]; then
+  echo "错误: 找不到待签名和公证的 DMG" >&2
+  exit 1
 fi
 
-echo "==> 注入 Info.plist 自定义键（必须在签名之前，否则签名失效）..."
-INFO_PLIST="$APP_PATH/Contents/Info.plist"
-# NSAppleEventsUsageDescription：osascript 'tell application X to quit' 必需
-# Hardened Runtime 下没有这个 key，AppleEvents 调用会被静默拒绝（macOS 14+）
-if ! /usr/libexec/PlistBuddy -c "Print :NSAppleEventsUsageDescription" "$INFO_PLIST" >/dev/null 2>&1; then
-  /usr/libexec/PlistBuddy -c "Add :NSAppleEventsUsageDescription string 'MacSlim 需要发送 AppleEvent 来优雅退出其他应用程序。'" "$INFO_PLIST"
-  echo "    ✓ 已注入 NSAppleEventsUsageDescription"
-else
-  echo "    ✓ NSAppleEventsUsageDescription 已存在，跳过"
+IDENTITIES="$(security find-identity -v -p codesigning)"
+if [[ "$IDENTITIES" != *"$SIGNING_ID"* ]]; then
+  echo "错误: Keychain 中未找到签名证书 $SIGNING_ID" >&2
+  exit 1
 fi
+
+trap 'echo "错误: Apple notary 凭证预检失败，请检查本机 Keychain" >&2' ERR
+xcrun notarytool history --keychain-profile "$PROFILE_NAME" >/dev/null 2>&1
+trap - ERR
+
+TIMESTAMP_FLAG="--timestamp"
 
 echo "==> 签名 .app 内所有二进制..."
 for f in "$APP_PATH/Contents/MacOS"/*; do
   if [ -f "$f" ] && [ -x "$f" ]; then
     codesign --force --options runtime $TIMESTAMP_FLAG \
       --entitlements "$ENTITLEMENTS" \
-      --sign "$SIGNING_ID" "$f" 2>&1 | grep -v "^$" || true
+      --sign "$SIGNING_ID" "$f"
   fi
 done
 
@@ -65,46 +78,44 @@ codesign --force --options runtime $TIMESTAMP_FLAG \
 echo "==> 验证签名..."
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-if [ -n "$DMG_PATH" ]; then
-  echo "==> 签名 DMG..."
-  codesign --force $TIMESTAMP_FLAG --sign "$SIGNING_ID" "$DMG_PATH"
-  codesign --verify --verbose "$DMG_PATH"
+echo "==> 签名 DMG..."
+codesign --force $TIMESTAMP_FLAG --sign "$SIGNING_ID" "$DMG_PATH"
+codesign --verify --verbose=4 "$DMG_PATH"
+
+echo "==> 打包 .app 用于公证..."
+rm -f "$APP_ARCHIVE_PATH"
+ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ARCHIVE_PATH"
+
+echo "==> 提交 .app 归档到 Apple 公证..."
+xcrun notarytool submit "$APP_ARCHIVE_PATH" \
+  --keychain-profile "$PROFILE_NAME" \
+  --wait
+
+echo "==> 提交 DMG 到 Apple 公证..."
+xcrun notarytool submit "$DMG_PATH" \
+  --keychain-profile "$PROFILE_NAME" \
+  --wait
+
+echo "==> 装订并验证公证票据..."
+xcrun stapler staple "$DMG_PATH"
+xcrun stapler staple "$APP_PATH"
+xcrun stapler validate "$APP_PATH"
+xcrun stapler validate "$DMG_PATH"
+
+echo "==> 签名与 Gatekeeper 最终验证..."
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+SIGNATURE_DETAILS="$(codesign -dvvv "$APP_PATH" 2>&1)"
+if [[ "$SIGNATURE_DETAILS" != *"Timestamp="* ]]; then
+  echo "错误: .app 签名缺少 secure timestamp" >&2
+  exit 1
 fi
-
-if [ "$TIMESTAMP_FLAG" = "--timestamp=none" ]; then
-  echo ""
-  echo "⚠️  本次签名无时间戳 —— 无法通过 Apple 公证。"
-  echo "   Apple timestamp 服务恢复后，重跑 ./scripts/sign.sh $TARGET 即可自动公证。"
-  exit 0
-fi
-
-# notarize
-if xcrun notarytool history --keychain-profile "$PROFILE_NAME" >/dev/null 2>&1; then
-  if [ -n "$DMG_PATH" ]; then
-    echo "==> 提交 DMG 到 Apple 公证..."
-    xcrun notarytool submit "$DMG_PATH" \
-      --keychain-profile "$PROFILE_NAME" \
-      --wait
-
-    echo "==> 装订公证票据..."
-    xcrun stapler staple "$DMG_PATH"
-    xcrun stapler staple "$APP_PATH"
-
-    echo "==> Gatekeeper 最终验证..."
-    spctl -a -vv -t install "$DMG_PATH" || true
-    spctl -a -vv "$APP_PATH" || true
-  fi
-else
-  echo ""
-  echo "==> notarytool 凭证未配置。首次执行一次下面的命令："
-  echo ""
-  echo "  xcrun notarytool store-credentials $PROFILE_NAME \\"
-  echo "    --apple-id YOUR_APPLE_ID@example.com \\"
-  echo "    --team-id $TEAM_ID \\"
-  echo "    --password YOUR_APP_SPECIFIC_PASSWORD"
-  echo ""
-  echo "App-Specific Password 到 https://appleid.apple.com 登录后生成。"
-fi
+codesign --verify --verbose=4 "$DMG_PATH"
+spctl -a -t exec -vv "$APP_PATH"
+spctl -a -t install -vv "$DMG_PATH"
+python3 scripts/updater_artifact.py rebuild \
+  --app "$APP_PATH" \
+  --archive "$UPDATER_PATH" \
+  --target "$RUST_TARGET"
 
 echo ""
 echo "✅ 签名流程结束"
