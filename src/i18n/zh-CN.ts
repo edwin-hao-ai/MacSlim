@@ -72,6 +72,8 @@ export const zhCN = {
       "受保护进程（应用主进程、多进程族组件、刚启动不足 10 分钟等）只能强制终止，进程树会被 SIGKILL 打断。",
     forceTerminate: "仍要强制终止",
     protectedHint: "受保护：",
+    masTerminateUnsupported:
+      "App Store 版运行在系统沙箱内，无法终止其他进程。需要终止功能请用 Developer ID 版；这一页仍可用来查看内存与 CPU 占用。",
     scanFailed: "扫描失败: {error}",
     optimizeFailed: "优化失败: {error}",
     whitelistTooltip: "加入白名单（永不再扫描此进程）",

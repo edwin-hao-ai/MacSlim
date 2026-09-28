@@ -41,6 +41,7 @@ import {
   List,
 } from "lucide-solid";
 import { useI18n } from "@/i18n";
+import { canTerminateProcesses } from "@/lib/flavor";
 
 type SortKey = "memory" | "cpu" | "name" | "pid" | "uptime";
 type ViewMode = "tree" | "flat";
@@ -688,16 +689,28 @@ const ProcessView: Component = () => {
       </Show>
 
       <div class="px-6 py-3 border-t border-black/5 dark:border-white/5 flex items-center gap-3">
-        <button
-          type="button"
-          class="btn-primary"
-          disabled={selected().size === 0 || busy()}
-          onClick={() => void terminateSelected()}
+        <Show
+          when={canTerminateProcesses()}
+          fallback={
+            // MAS 版：App Sandbox 下沙箱进程不能给其他进程发信号，且没有
+            // entitlement 能放行。与其留一个点了必定失败的按钮、再弹「权限不足」
+            // （会被误解成系统设置问题），不如把入口换成一句说明。
+            <p class="text-xs text-zinc-500 max-w-prose">
+              {t("process.masTerminateUnsupported")}
+            </p>
+          }
         >
-          <Show when={!busy()} fallback={<Loader2 size={14} class="animate-spin" />}>
-            {t("process.terminateSelected", { count: selected().size })}
-          </Show>
-        </button>
+          <button
+            type="button"
+            class="btn-primary"
+            disabled={selected().size === 0 || busy()}
+            onClick={() => void terminateSelected()}
+          >
+            <Show when={!busy()} fallback={<Loader2 size={14} class="animate-spin" />}>
+              {t("process.terminateSelected", { count: selected().size })}
+            </Show>
+          </button>
+        </Show>
         <span class="text-xs text-zinc-500">
           {t("process.protectedHint")}
         </span>

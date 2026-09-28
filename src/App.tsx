@@ -10,6 +10,7 @@ import UninstallerView from "@/views/UninstallerView";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import AppShell from "@/components/shell/AppShell";
 import { useI18n } from "@/i18n";
+import { initFlavor } from "@/lib/flavor";
 
 /** 用 CSS display 切换的 tab 面板，组件始终挂载不丢状态 */
 const TabPanel: Component<{ id: ViewId; active: ViewId; children: any }> = (props) => (
@@ -38,6 +39,9 @@ const App: Component = () => {
   };
 
   onMount(async () => {
+    // 先定构建形态，再做别的。视图会读 `canTerminateProcesses()` 来决定
+    // 「终止」入口要不要出现，所以它必须早于任何视图渲染确定下来。
+    await initFlavor();
     try {
       const registered = await listen<void>("tray:scan", () => {
         setView("scan");
