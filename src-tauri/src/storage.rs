@@ -1,3 +1,4 @@
+use crate::user_error::UserError;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -12,7 +13,7 @@ pub struct Storage {
 pub struct HistoryEntry {
     pub id: i64,
     pub timestamp: DateTime<Utc>,
-    pub operation: String, // "process_kill" | "cache_clean"
+    pub operation: String, // cache | process | app_terminate | uninstall | docker
     pub target: String,
     pub freed_bytes: u64,
     pub success: bool,
@@ -29,7 +30,7 @@ pub struct WhitelistEntry {
 }
 
 impl Storage {
-    pub fn open() -> Result<Self, String> {
+    pub fn open() -> Result<Self, UserError> {
         let path = db_path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
@@ -72,19 +73,26 @@ impl Storage {
         freed_bytes: u64,
         success: bool,
         detail: &str,
-    ) -> Result<i64, String> {
+    ) -> Result<i64, UserError> {
         let now = Utc::now().to_rfc3339();
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         c.execute(
             "INSERT INTO history (timestamp, operation, target, freed_bytes, success, detail)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![now, operation, target, freed_bytes as i64, success as i32, detail],
+            params![
+                now,
+                operation,
+                target,
+                freed_bytes as i64,
+                success as i32,
+                detail
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(c.last_insert_rowid())
     }
 
-    pub fn recent_history(&self, limit: usize) -> Result<Vec<HistoryEntry>, String> {
+    pub fn recent_history(&self, limit: usize) -> Result<Vec<HistoryEntry>, UserError> {
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = c
             .prepare(
@@ -116,7 +124,7 @@ impl Storage {
         Ok(out)
     }
 
-    pub fn add_whitelist(&self, kind: &str, value: &str, note: &str) -> Result<(), String> {
+    pub fn add_whitelist(&self, kind: &str, value: &str, note: &str) -> Result<(), UserError> {
         let now = Utc::now().to_rfc3339();
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         c.execute(
@@ -127,19 +135,17 @@ impl Storage {
         Ok(())
     }
 
-    pub fn remove_whitelist(&self, id: i64) -> Result<(), String> {
+    pub fn remove_whitelist(&self, id: i64) -> Result<(), UserError> {
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         c.execute("DELETE FROM whitelist WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    pub fn list_whitelist(&self) -> Result<Vec<WhitelistEntry>, String> {
+    pub fn list_whitelist(&self) -> Result<Vec<WhitelistEntry>, UserError> {
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = c
-            .prepare(
-                "SELECT id, kind, value, added_at, note FROM whitelist ORDER BY id DESC",
-            )
+            .prepare("SELECT id, kind, value, added_at, note FROM whitelist ORDER BY id DESC")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| {
@@ -175,7 +181,7 @@ impl Storage {
     }
 }
 
-fn db_path() -> Result<PathBuf, String> {
+fn db_path() -> Result<PathBuf, UserError> {
     let base = dirs::config_dir().ok_or("无法获取配置目录")?;
     Ok(base.join("MacSlim").join("macslim.db"))
 }

@@ -17,8 +17,7 @@ pub struct TrayItems {
 
 pub fn init_tray(app: &AppHandle) -> tauri::Result<()> {
     // 动态状态区（只读项，靠 monitor 线程刷新）
-    let health_header =
-        MenuItem::with_id(app, "health_header", "系统状态", false, None::<&str>)?;
+    let health_header = MenuItem::with_id(app, "health_header", "系统状态", false, None::<&str>)?;
     let cpu_item = MenuItem::with_id(app, "cpu_item", "  CPU:    —", false, None::<&str>)?;
     let mem_item = MenuItem::with_id(app, "mem_item", "  内存:   —", false, None::<&str>)?;
     let disk_item = MenuItem::with_id(app, "disk_item", "  磁盘:   —", false, None::<&str>)?;
@@ -32,8 +31,7 @@ pub fn init_tray(app: &AppHandle) -> tauri::Result<()> {
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
 
-    let about_item =
-        MenuItem::with_id(app, "about", "关于 MacSlim v0.1.0", false, None::<&str>)?;
+    let about_item = MenuItem::with_id(app, "about", "关于 MacSlim v0.1.0", false, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出 MacSlim", true, None::<&str>)?;
 
     let menu = Menu::with_items(
@@ -145,9 +143,7 @@ pub fn refresh_tray(app: &AppHandle, h: &SystemHealth) {
     // 1. 菜单栏 title：像 iStat Menus 一样显示 CPU%
     //    阈值：<60% 只显示图标不显示文字；>=60% 开始显示 CPU 数字；
     //    任一维度超过 90% 显示 "!" 警示
-    let critical = h.cpu_percent >= 90.0
-        || h.memory_percent >= 95.0
-        || h.disk_percent >= 95.0;
+    let critical = h.cpu_percent >= 90.0 || h.memory_percent >= 95.0 || h.disk_percent >= 95.0;
     let warn = h.cpu_percent >= 60.0 || h.memory_percent >= 85.0 || h.disk_percent >= 90.0;
 
     let title_text = if critical {
@@ -169,29 +165,17 @@ pub fn refresh_tray(app: &AppHandle, h: &SystemHealth) {
 
     // 2. 菜单项文字（带状态 emoji）
     if let Some(items) = app.try_state::<TrayItems>() {
-        let state_dot = |p: f32, warn_at: f32, crit_at: f32| -> &'static str {
-            if p >= crit_at {
-                "●"
-            } else if p >= warn_at {
-                "●"
-            } else {
-                "●"
-            }
-        };
-        // 用字符表示严重程度：不触发 emoji 渲染问题
-        let fmt_line = |label: &str, pct: f32, warn_at: f32, crit_at: f32| -> String {
-            let marker = state_dot(pct, warn_at, crit_at);
-            format!("  {}  {}  {:>4.1}%", marker, label, pct)
-        };
+        let fmt_line =
+            |label: &str, pct: f32| -> String { format!("  ●  {}  {:>4.1}%", label, pct) };
 
         if let Ok(i) = items.cpu.lock() {
-            let _ = i.set_text(fmt_line("CPU  ", h.cpu_percent, 60.0, 90.0));
+            let _ = i.set_text(fmt_line("CPU  ", h.cpu_percent));
         }
         if let Ok(i) = items.mem.lock() {
-            let _ = i.set_text(fmt_line("内存", h.memory_percent, 85.0, 95.0));
+            let _ = i.set_text(fmt_line("内存", h.memory_percent));
         }
         if let Ok(i) = items.disk.lock() {
-            let _ = i.set_text(fmt_line("磁盘", h.disk_percent, 90.0, 95.0));
+            let _ = i.set_text(fmt_line("磁盘", h.disk_percent));
         }
         if let Ok(i) = items.health_header.lock() {
             let head = if critical {

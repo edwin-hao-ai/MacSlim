@@ -1,6 +1,6 @@
 [package]
 name = "macslim"
-version = "0.2.2"
+version = "1.0.0"
 description = "MacSlim - Mac developer and user system maintenance tool"
 authors = ["Edwin Hao"]
 edition = "2021"
@@ -23,7 +23,7 @@ path = "src/bin/cli.rs"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.1", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri = { version = "2.1", features = ["tray-icon", "image-png"] }
 tauri-plugin-os = "2.2"
 tauri-plugin-shell = "2.2"
 tauri-plugin-notification = "2.2"
@@ -32,12 +32,12 @@ tauri-plugin-updater = "2.2"
 tauri-plugin-process = "2.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+getrandom = "0.2"
 sysinfo = "0.33"
 nix = { version = "0.29", features = ["signal", "process", "user"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
 chrono = { version = "0.4", features = ["serde"] }
-window-vibrancy = "0.6"
 walkdir = "2"
 dirs = "5"
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }

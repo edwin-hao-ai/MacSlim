@@ -2,77 +2,86 @@ pub mod app_scanner;
 pub mod applications;
 pub mod cache_cleaner;
 pub mod cache_scanner;
+pub mod cli_operations;
 pub mod dev_tool_rules;
 pub mod docker;
+pub mod i18n_text;
 pub mod monitor;
+pub(crate) mod operation_commands;
+#[allow(dead_code)]
+pub(crate) mod operation_executor;
+pub mod operations;
 pub mod ports;
-pub mod process_ops;
+pub(crate) mod process_ops;
 pub mod process_safety;
+pub(crate) mod residue_policy;
 pub mod residue_scanner;
+pub mod scan_progress;
 pub mod scanner;
 pub mod storage;
 pub mod tray;
 pub mod uninstaller;
+pub mod user_error;
 pub mod whitelist;
 
 // CLI-friendly re-exports
-pub use cache_cleaner::clean as cache_cleaner_clean;
-pub use cache_scanner::scan as cache_scanner_scan;
+use crate::user_error::{ErrorCode, UserError};
 pub use scanner::read_health as scanner_read_health;
 pub fn run_tauri() {
     run();
 }
 
-use cache_cleaner::CleanSummary;
-use cache_scanner::{CacheItem, CacheScanResult};
-use residue_scanner::AppResidue;
-use scanner::{ScanResult, SystemHealth};
-use serde::Serialize;
+use operation_commands::{
+    process_whitelist_policy, CacheSnapshotView, OperationResult, PrepareOperationRequest,
+    ResidueAppGroup, SnapshotResult,
+};
+use operations::OperationStore;
+use scanner::SystemHealth;
 use std::sync::{Arc, Mutex};
 use storage::{HistoryEntry, Storage, WhitelistEntry};
 use sysinfo::System;
-use tauri::{Manager, State, WindowEvent};
-use uninstaller::{UninstallReport, UninstallTarget};
+use tauri::{Manager, State, WebviewWindow, WindowEvent};
 
 pub struct AppState {
     pub sys: Mutex<System>,
     pub storage: Arc<Storage>,
+    pub operations: Arc<Mutex<OperationStore>>,
+}
+
+fn whitelist_policy(state: &AppState) -> impl Fn(&str) -> bool + Send + Sync + 'static {
+    process_whitelist_policy(state.storage.clone())
 }
 
 // ========== System & Process ==========
 
 #[tauri::command]
-async fn get_system_health(state: State<'_, AppState>) -> Result<SystemHealth, String> {
+async fn get_system_health(state: State<'_, AppState>) -> Result<SystemHealth, UserError> {
     let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
     Ok(scanner::read_health(&mut sys))
 }
 
 #[tauri::command]
-async fn scan_all(state: State<'_, AppState>) -> Result<ScanResult, String> {
+async fn scan_all(
+    state: State<'_, AppState>,
+) -> Result<SnapshotResult<scanner::ScanResult>, UserError> {
     let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
-    let mut result = scanner::scan(&mut sys);
-    // 叠加用户自定义白名单
-    let storage = state.storage.clone();
-    result
-        .processes
-        .retain(|p| !storage.is_whitelisted("process", &p.name));
-    Ok(result)
+    let result = scanner::scan(&mut sys);
+    let policy = whitelist_policy(&state);
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::snapshot_process_scan(&mut operations, result, &policy)
 }
 
 /// 列出所有可见用户进程（不做分类过滤，用于进程管理页）。
 /// 与 scan_all 不同：返回全部，前端自己做展示/搜索/排序。
 #[tauri::command]
-async fn list_all_processes(state: State<'_, AppState>) -> Result<Vec<scanner::ProcessRow>, String> {
+async fn list_all_processes(
+    state: State<'_, AppState>,
+) -> Result<SnapshotResult<Vec<scanner::ProcessRow>>, UserError> {
     let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
-    let mut rows = scanner::list_all(&mut sys);
-    for row in &mut rows {
-        if state.storage.is_whitelisted("process", &row.name) {
-            row.whitelisted = true;
-            row.protected = true;
-            row.protected_reason = Some("命中白名单，默认不建议终止".into());
-        }
-    }
-    Ok(rows)
+    let rows = scanner::list_all(&mut sys);
+    let policy = whitelist_policy(&state);
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::snapshot_process_rows(&mut operations, rows, &policy)
 }
 
 // ========== 应用程序管理 ==========
@@ -80,224 +89,106 @@ async fn list_all_processes(state: State<'_, AppState>) -> Result<Vec<scanner::P
 #[tauri::command]
 async fn list_applications(
     state: State<'_, AppState>,
-) -> Result<Vec<applications::AppInfo>, String> {
+) -> Result<SnapshotResult<Vec<applications::AppInfo>>, UserError> {
     let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
-    let mut apps = applications::list_running_apps(&mut sys);
-    for app in &mut apps {
-        let mut protected_count = 0usize;
-        let mut whitelisted_count = 0usize;
-        for child in &mut app.children {
-            if state.storage.is_whitelisted("process", &child.name) {
-                child.whitelisted = true;
-                child.protected = true;
-                child.protected_reason = Some("命中白名单，默认不建议终止".into());
-            }
-            if child.protected {
-                protected_count += 1;
-            }
-            if child.whitelisted {
-                whitelisted_count += 1;
-            }
-        }
-        app.protected_process_count = protected_count;
-        app.whitelisted_process_count = whitelisted_count;
-    }
-    Ok(apps)
-}
-
-#[tauri::command]
-async fn quit_application(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    let result = applications::graceful_quit_app(&name).await;
-    // 记录历史：成功 / 失败都写一条
-    let _ = state.storage.log_history(
-        "app_quit",
-        &name,
-        0,
-        result.is_ok(),
-        &result.as_ref().err().cloned().unwrap_or_else(|| "已发送退出信号".into()),
-    );
-    result
-}
-
-#[tauri::command]
-async fn force_quit_application(
-    state: State<'_, AppState>,
-    name: String,
-    pids: Vec<u32>,
-) -> Result<Vec<(u32, String)>, String> {
-    let results = applications::force_quit_app(&pids);
-    let killed_count = results.iter().filter(|(_, o)| o.is_ok()).count();
-    let total = results.len();
-    let success = killed_count == total;
-    let detail = format!("终止 {}/{} 个进程", killed_count, total);
-    let _ = state.storage.log_history(
-        "app_force_quit",
-        &name,
-        0,
-        success,
-        &detail,
-    );
-    Ok(results
-        .into_iter()
-        .map(|(pid, outcome)| (pid, outcome.message()))
-        .collect())
+    let apps = applications::list_running_apps(&mut sys);
+    let policy = whitelist_policy(&state);
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::snapshot_applications(&mut operations, apps, &policy)
 }
 
 // ========== Docker 深度视图 ==========
 
 #[tauri::command]
-async fn docker_available() -> Result<bool, String> {
+async fn docker_available() -> Result<bool, UserError> {
     Ok(docker::is_available().await)
 }
 
 #[tauri::command]
-async fn docker_inventory() -> Result<docker::DockerInventory, String> {
-    docker::inventory().await
-}
-
-#[tauri::command]
-async fn docker_remove_image(id: String) -> Result<(), String> {
-    docker::remove_image(&id).await
-}
-
-#[tauri::command]
-async fn docker_remove_container(id: String) -> Result<(), String> {
-    docker::remove_container(&id).await
-}
-
-#[tauri::command]
-async fn docker_remove_volume(name: String) -> Result<(), String> {
-    docker::remove_volume(&name).await
-}
-
-#[tauri::command]
-async fn docker_prune_all() -> Result<String, String> {
-    docker::prune_all().await
-}
-
-#[derive(Serialize)]
-pub struct KillResult {
-    pub pid: u32,
-    pub name: String,
-    pub success: bool,
-    pub message: String,
-}
-
-#[derive(Serialize)]
-pub struct KillReport {
-    pub killed: Vec<u32>,
-    pub failed: Vec<u32>,
-    pub details: Vec<KillResult>,
-}
-
-#[tauri::command]
-async fn kill_processes(
+async fn docker_inventory(
     state: State<'_, AppState>,
-    pids: Vec<u32>,
-    names: Vec<String>,
-) -> Result<KillReport, String> {
-    let mut killed = Vec::new();
-    let mut failed = Vec::new();
-    let mut details = Vec::new();
-
-    for (idx, pid) in pids.iter().enumerate() {
-        let name = names.get(idx).cloned().unwrap_or_default();
-        let outcome = process_ops::graceful_kill(*pid);
-        let msg = outcome.message();
-        let ok = outcome.is_ok();
-
-        if ok {
-            killed.push(*pid);
-        } else {
-            failed.push(*pid);
-        }
-        details.push(KillResult {
-            pid: *pid,
-            name: name.clone(),
-            success: ok,
-            message: msg.clone(),
-        });
-
-        let _ = state.storage.log_history(
-            "process_kill",
-            &format!("{} (PID {})", name, pid),
-            0,
-            ok,
-            &msg,
-        );
-    }
-    Ok(KillReport {
-        killed,
-        failed,
-        details,
-    })
+) -> Result<SnapshotResult<docker::DockerInventory>, UserError> {
+    let inventory = docker::inventory().await?;
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::snapshot_docker_inventory(&mut operations, inventory)
 }
 
 // ========== Cache ==========
 
 #[tauri::command]
-async fn scan_cache() -> Result<CacheScanResult, String> {
-    Ok(cache_scanner::scan().await)
-}
-
-#[tauri::command]
-async fn clean_cache(
+async fn scan_cache(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
-    items: Vec<CacheItem>,
-) -> Result<CleanSummary, String> {
-    let summary = cache_cleaner::clean(items).await;
-    for r in &summary.reports {
-        let _ = state.storage.log_history(
-            "cache_clean",
-            &r.label,
-            r.freed_bytes,
-            r.success,
-            &r.error.clone().unwrap_or_else(|| "已清理".into()),
-        );
-    }
-    Ok(summary)
+) -> Result<SnapshotResult<CacheSnapshotView>, UserError> {
+    use tauri::Emitter;
+    let sink: crate::scan_progress::ProgressSink = std::sync::Arc::new(move |update| {
+        let _ = app.emit("cache-scan-progress", &update);
+    });
+    let result = cache_scanner::scan(Some(sink)).await;
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::snapshot_cache(&mut operations, result)
 }
 
 // ========== 应用卸载 ==========
 
 /// 扫描已安装应用列表
 #[tauri::command]
-async fn scan_installed_apps(state: State<'_, AppState>) -> Result<Vec<app_scanner::InstalledApp>, String> {
-    let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
-    Ok(app_scanner::scan_installed_apps(&mut sys))
-}
-
-/// 扫描指定应用的残留文件
-#[tauri::command]
-async fn scan_app_residues(bundle_id: String, app_name: String) -> Result<AppResidue, String> {
-    Ok(residue_scanner::scan_residues(&bundle_id, &app_name))
-}
-
-/// 批量卸载应用（移至废纸篓）
-#[tauri::command]
-async fn uninstall_apps(
+async fn scan_installed_apps(
     state: State<'_, AppState>,
-    targets: Vec<UninstallTarget>,
-) -> Result<Vec<UninstallReport>, String> {
-    let mut reports = Vec::new();
-    for target in &targets {
-        let report = uninstaller::uninstall_app(target).await;
-        // 记录卸载历史
-        let detail = serde_json::json!({
-            "moved": report.moved_count,
-            "failed": report.failed_count,
-        })
-        .to_string();
-        let _ = state.storage.log_history(
-            "app_uninstall",
-            &format!("{} ({})", report.app_name, report.bundle_id),
-            report.total_freed_bytes,
-            report.failed_count == 0,
-            &detail,
-        );
-        reports.push(report);
-    }
-    Ok(reports)
+) -> Result<SnapshotResult<Vec<app_scanner::InstalledApp>>, UserError> {
+    let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
+    let apps = app_scanner::scan_installed_apps(&mut sys);
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::snapshot_installed_apps(&mut operations, apps)
+}
+
+#[tauri::command]
+async fn scan_app_residues_batch(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    app_snapshot_id: String,
+    app_keys: Vec<String>,
+) -> Result<SnapshotResult<Vec<ResidueAppGroup>>, UserError> {
+    let selections = {
+        let operations = state.operations.lock().map_err(|error| error.to_string())?;
+        operation_commands::resolve_installed_apps(&operations, &app_snapshot_id, &app_keys)?
+    };
+    let groups = tauri::async_runtime::spawn_blocking(move || {
+        use rayon::prelude::*;
+        use tauri::Emitter;
+        let index = residue_scanner::LibraryIndex::build();
+        selections
+            .par_iter()
+            .map(|(app_key, identity)| {
+                let residue = residue_scanner::scan_residues_with_index(
+                    index.as_ref(),
+                    &identity.bundle_id,
+                    &identity.app_name,
+                );
+                let _ = app.emit(
+                    "residue-scan-progress",
+                    scan_progress::StageUpdate {
+                        stage: residue.app_name.clone(),
+                        state: "done",
+                        item_count: residue.items.len(),
+                        found_bytes: residue.total_bytes,
+                    },
+                );
+                (app_key.clone(), residue)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|error| {
+        UserError::one(
+            ErrorCode::RESIDUE_SCAN_FAILED,
+            format!("扫描残留失败: {error}"),
+            "reason",
+            &error,
+        )
+    })?;
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::register_residue_groups(&mut operations, groups)
 }
 
 /// 检查应用是否正在运行
@@ -305,33 +196,81 @@ async fn uninstall_apps(
 async fn check_app_running(
     state: State<'_, AppState>,
     bundle_path: String,
-) -> Result<bool, String> {
+) -> Result<bool, UserError> {
     let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
     Ok(uninstaller::is_app_running(&bundle_path, &mut sys))
 }
 
-/// 退出应用并执行卸载
+// ========== Operation Broker ==========
+
 #[tauri::command]
-async fn quit_and_uninstall(
+async fn prepare_operation(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    app_name: String,
-    target: UninstallTarget,
-) -> Result<UninstallReport, String> {
-    let report = uninstaller::quit_and_uninstall(&app_name, &target).await?;
-    // 记录卸载历史
-    let detail = serde_json::json!({
-        "moved": report.moved_count,
-        "failed": report.failed_count,
-    })
-    .to_string();
-    let _ = state.storage.log_history(
-        "app_uninstall",
-        &format!("{} ({})", report.app_name, report.bundle_id),
-        report.total_freed_bytes,
-        report.failed_count == 0,
-        &detail,
+    request: PrepareOperationRequest,
+) -> Result<operations::PreparedOperation, UserError> {
+    let owner = window.label().to_owned();
+    let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
+    operation_commands::prepare_operation_with(&mut operations, &owner, request)
+}
+
+#[tauri::command]
+async fn execute_operation(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    operation_id: String,
+) -> Result<OperationResult, UserError> {
+    let owner = window.label().to_owned();
+    let history = operation_commands::system_history(&state.storage);
+    let policy = whitelist_policy(&state);
+    let domains = operation_executor::system_domain_services(
+        &operation_executor::SystemCacheCleaner,
+        &uninstaller::SystemUninstaller,
+        &applications::SystemAppQuitter,
     );
-    Ok(report)
+    let operations = Arc::clone(&state.operations);
+    operation_commands::execute_operation_with(
+        operations.as_ref(),
+        &history,
+        &owner,
+        &operation_id,
+        move |plan| async move { run_operation_plan(plan, policy, &domains).await },
+    )
+    .await
+}
+
+async fn run_operation_plan(
+    plan: operations::ConsumedPlan,
+    policy: impl Fn(&str) -> bool + Send + Sync + 'static,
+    domains: &operation_executor::DomainServices<
+        '_,
+        operation_executor::SystemCacheCleaner,
+        uninstaller::SystemUninstaller,
+        applications::SystemAppQuitter,
+        docker::SystemDocker,
+    >,
+) -> Result<operation_executor::OperationOutcome, UserError> {
+    if !plan.kind().is_termination() {
+        return operation_executor::execute_domain_plan(plan, domains).await;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut observer = process_ops::SystemProcessObserver::with_policy(policy);
+        let mut signaller = process_ops::SystemProcessSignaller;
+        let mut processes = operation_executor::ProcessServices {
+            observer: &mut observer,
+            signaller: &mut signaller,
+        };
+        operation_executor::execute_termination_plan(plan, &mut processes)
+    })
+    .await
+    .map_err(|error| {
+        UserError::one(
+            ErrorCode::PROCESS_EXECUTION_FAILED,
+            format!("进程操作执行失败: {error}"),
+            "reason",
+            &error,
+        )
+    })?
 }
 
 // ========== History & Whitelist ==========
@@ -340,12 +279,12 @@ async fn quit_and_uninstall(
 async fn get_history(
     state: State<'_, AppState>,
     limit: Option<usize>,
-) -> Result<Vec<HistoryEntry>, String> {
+) -> Result<Vec<HistoryEntry>, UserError> {
     state.storage.recent_history(limit.unwrap_or(200))
 }
 
 #[tauri::command]
-async fn get_whitelist(state: State<'_, AppState>) -> Result<Vec<WhitelistEntry>, String> {
+async fn get_whitelist(state: State<'_, AppState>) -> Result<Vec<WhitelistEntry>, UserError> {
     state.storage.list_whitelist()
 }
 
@@ -355,16 +294,37 @@ async fn add_whitelist(
     kind: String,
     value: String,
     note: String,
-) -> Result<(), String> {
+) -> Result<(), UserError> {
     state.storage.add_whitelist(&kind, &value, &note)
 }
 
 #[tauri::command]
-async fn remove_whitelist(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+async fn remove_whitelist(state: State<'_, AppState>, id: i64) -> Result<(), UserError> {
     state.storage.remove_whitelist(id)
 }
 
 // ========== Entry point ==========
+
+fn setup_app(
+    app: &mut tauri::App,
+    storage: Arc<Storage>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    app.manage(AppState {
+        sys: Mutex::new(sys),
+        storage: storage.clone(),
+        operations: Arc::new(Mutex::new(OperationStore::new())),
+    });
+
+    // 系统托盘
+    tray::init_tray(app.handle())?;
+
+    // 后台健康监控（2 秒一次）
+    monitor::start_background_monitor(app.handle().clone());
+
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -380,41 +340,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .setup({
-            let storage = storage.clone();
-            move |app| {
-                let mut sys = System::new_all();
-                sys.refresh_all();
-                app.manage(AppState {
-                    sys: Mutex::new(sys),
-                    storage: storage.clone(),
-                });
-
-                // macOS 毛玻璃
-                #[cfg(target_os = "macos")]
-                {
-                    use window_vibrancy::{
-                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
-                    };
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = apply_vibrancy(
-                            &window,
-                            NSVisualEffectMaterial::Sidebar,
-                            Some(NSVisualEffectState::Active),
-                            Some(12.0),
-                        );
-                    }
-                }
-
-                // 系统托盘
-                tray::init_tray(app.handle())?;
-
-                // 后台健康监控（2 秒一次）
-                monitor::start_background_monitor(app.handle().clone());
-
-                Ok(())
-            }
-        })
+        .setup(move |app| setup_app(app, storage.clone()))
         .on_window_event(|window, event| {
             // 点 X 关闭 → 不退出应用，只把窗口藏起来，托盘保持驻留
             // 真正退出通过托盘菜单「退出 MacSlim」
@@ -427,28 +353,24 @@ pub fn run() {
             get_system_health,
             scan_all,
             list_all_processes,
-            kill_processes,
             scan_cache,
-            clean_cache,
             get_history,
             get_whitelist,
             add_whitelist,
             remove_whitelist,
             list_applications,
-            quit_application,
-            force_quit_application,
             docker_available,
             docker_inventory,
-            docker_remove_image,
-            docker_remove_container,
-            docker_remove_volume,
-            docker_prune_all,
             scan_installed_apps,
-            scan_app_residues,
-            uninstall_apps,
+            scan_app_residues_batch,
             check_app_running,
-            quit_and_uninstall,
+            prepare_operation,
+            execute_operation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+#[path = "lib_progress_tests.rs"]
+mod lib_progress_tests;

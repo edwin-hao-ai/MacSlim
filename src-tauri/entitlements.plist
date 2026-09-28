@@ -2,25 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Hardened Runtime 必需项：允许 WebView JIT 执行（Tauri / WKWebView 需要） -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <!-- 允许 Tauri 开发模式加载本地 dev server（生产构建下此权限是 no-op） -->
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-    <!-- 允许调用子进程：npm cache clean / docker prune / brew cleanup 等 -->
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-    <true/>
-    <!-- 网络访问：软件更新（未来） + Docker daemon UNIX socket -->
     <key>com.apple.security.network.client</key>
     <true/>
-    <!-- 通知中心权限 -->
-    <key>com.apple.security.personal-information.notifications</key>
-    <true/>
-    <!-- 允许发送 AppleEvent（osascript "tell application X to quit" 必需）
-         没有这个 Hardened Runtime 会静默拒绝，导致「退出应用」按钮失效 -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
 </dict>

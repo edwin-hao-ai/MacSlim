@@ -74,5 +74,7 @@ pub fn is_whitelisted(name: &str) -> bool {
     if is_system_core(name) {
         return true;
     }
-    user_whitelist().iter().any(|n| n.eq_ignore_ascii_case(name))
+    user_whitelist()
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(name))
 }

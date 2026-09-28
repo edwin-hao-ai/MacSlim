@@ -2255,11 +2255,12 @@ dependencies = [
 
 [[package]]
 name = "macslim"
-version = "0.2.2"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
+ "getrandom 0.2.17",
  "nix 0.29.0",
  "rayon",
  "rusqlite",
@@ -2278,7 +2279,6 @@ dependencies = [
  "tokio",
  "walkdir",
  "which",
- "window-vibrancy",
 ]
 
 [[package]]

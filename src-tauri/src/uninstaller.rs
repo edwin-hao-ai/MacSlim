@@ -1,9 +1,12 @@
 // 卸载执行器：将应用和残留文件移至废纸篓
-use serde::{Deserialize, Serialize};
+use crate::operation_executor::{DomainFuture, UninstallDomain};
+use crate::operations::{InstalledAppIdentity, LiveResidue, ResidueIdentity};
+use crate::user_error::{ErrorCode, UserError};
+use serde::Serialize;
 use std::path::Path;
 
-/// 卸载目标
-#[derive(Deserialize, Clone, Debug)]
+/// 卸载目标（只能由已消费的 operation plan 构造，客户端无法提交）
+#[derive(Clone, Debug)]
 pub struct UninstallTarget {
     pub bundle_path: String,
     pub app_name: String,
@@ -11,12 +14,27 @@ pub struct UninstallTarget {
     pub residue_paths: Vec<String>,
 }
 
+impl UninstallTarget {
+    pub(crate) fn from_plan(app: &InstalledAppIdentity, residues: &[ResidueIdentity]) -> Self {
+        Self {
+            bundle_path: app.bundle_path.clone(),
+            app_name: app.app_name.clone(),
+            bundle_id: app.bundle_id.clone(),
+            residue_paths: residues
+                .iter()
+                .map(|residue| residue.path.clone())
+                .collect(),
+        }
+    }
+}
+
 /// 单个文件的移动结果
 #[derive(Serialize, Clone, Debug)]
 pub struct MoveResult {
     pub path: String,
     pub success: bool,
-    pub error: Option<String>,
+    /// 失败原因：带 `code` 的结构化错误（`error` 命名空间），不是裸中文串。
+    pub error: Option<UserError>,
     pub size_bytes: u64,
 }
 
@@ -29,6 +47,83 @@ pub struct UninstallReport {
     pub moved_count: usize,
     pub failed_count: usize,
     pub details: Vec<MoveResult>,
+    /// 优雅退出失败原因：结构化错误，`None` 表示退出成功。
+    pub quit_error: Option<UserError>,
+}
+
+pub(crate) struct SystemUninstaller;
+
+impl UninstallDomain for SystemUninstaller {
+    fn observe_apps(
+        &self,
+        bundle_paths: &[String],
+    ) -> DomainFuture<'_, Result<Vec<InstalledAppIdentity>, UserError>> {
+        let observed: Vec<InstalledAppIdentity> = bundle_paths
+            .iter()
+            .filter_map(|path| read_installed_identity(Path::new(path)))
+            .collect();
+        Box::pin(async move { Ok(observed) })
+    }
+
+    fn observe_residues(
+        &self,
+        paths: &[String],
+    ) -> DomainFuture<'_, Result<Vec<LiveResidue>, UserError>> {
+        let observed: Vec<LiveResidue> = paths
+            .iter()
+            .map(|path| {
+                let candidate = Path::new(path);
+                let exists = candidate.symlink_metadata().is_ok();
+                let current = candidate
+                    .canonicalize()
+                    .unwrap_or_else(|_| candidate.to_path_buf());
+                LiveResidue {
+                    path: current.to_string_lossy().to_string(),
+                    exists,
+                }
+            })
+            .collect();
+        Box::pin(async move { Ok(observed) })
+    }
+
+    fn quit(&self, app_name: &str) -> DomainFuture<'_, Result<(), UserError>> {
+        let requested = app_name.to_owned();
+        Box::pin(async move { quit_app(&requested).await })
+    }
+
+    fn remove(
+        &self,
+        app: &InstalledAppIdentity,
+        residues: &[ResidueIdentity],
+    ) -> DomainFuture<'_, UninstallReport> {
+        let target = UninstallTarget::from_plan(app, residues);
+        Box::pin(async move { uninstall_app(&target).await })
+    }
+}
+
+pub(crate) fn read_installed_identity(bundle_path: &Path) -> Option<InstalledAppIdentity> {
+    if !bundle_path.is_dir() || bundle_path.extension().map_or(true, |ext| ext != "app") {
+        return None;
+    }
+    let plist_path = bundle_path.join("Contents/Info.plist");
+    let (name, bundle_id) = crate::applications::read_plist_metadata(&plist_path);
+    let bundle_id = bundle_id.unwrap_or_default();
+    Some(InstalledAppIdentity {
+        bundle_path: bundle_path.to_string_lossy().to_string(),
+        app_name: bundle_display_name(bundle_path, name),
+        is_system: crate::app_scanner::is_system_app(&bundle_id),
+        bundle_id,
+        bundle_size_bytes: 0,
+    })
+}
+
+pub(crate) fn bundle_display_name(bundle_path: &Path, plist_name: Option<String>) -> String {
+    plist_name.unwrap_or_else(|| {
+        bundle_path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap_or_else(|| "未知应用".to_owned())
+    })
 }
 
 /// 执行卸载（移至废纸篓）
@@ -39,15 +134,23 @@ pub struct UninstallReport {
 /// 3. 如因权限不足失败（如 /Applications/ 下的 app），收集起来在最后用
 ///    `do shell script with administrator privileges` 一次性弹出系统授权框
 ///    批量移动，避免多次重复弹窗
-pub async fn uninstall_app(target: &UninstallTarget) -> UninstallReport {
-    let mut details: Vec<MoveResult> = Vec::new();
-    let mut needs_admin: Vec<(String, u64)> = Vec::new();
-
+pub(crate) async fn uninstall_app(target: &UninstallTarget) -> UninstallReport {
     let mut all_paths: Vec<String> = Vec::with_capacity(1 + target.residue_paths.len());
     all_paths.push(target.bundle_path.clone());
     all_paths.extend(target.residue_paths.iter().cloned());
 
-    for path_str in &all_paths {
+    let (mut details, needs_admin) = trash_with_user_permission(&all_paths).await;
+    if !needs_admin.is_empty() {
+        details.extend(trash_with_admin(&needs_admin).await);
+    }
+
+    build_report(target, details)
+}
+
+async fn trash_with_user_permission(all_paths: &[String]) -> (Vec<MoveResult>, Vec<(String, u64)>) {
+    let mut details: Vec<MoveResult> = Vec::new();
+    let mut needs_admin: Vec<(String, u64)> = Vec::new();
+    for path_str in all_paths {
         match try_trash_user(path_str).await {
             TrashOutcome::Done(result) => details.push(result),
             TrashOutcome::NeedsAdmin { size } => {
@@ -55,39 +158,43 @@ pub async fn uninstall_app(target: &UninstallTarget) -> UninstallReport {
             }
         }
     }
+    (details, needs_admin)
+}
 
-    if !needs_admin.is_empty() {
-        let paths: Vec<&str> = needs_admin.iter().map(|(p, _)| p.as_str()).collect();
-        match trash_via_admin_batch(&paths).await {
-            Ok(()) => {
-                for (path, size) in needs_admin {
-                    details.push(MoveResult {
-                        path,
-                        success: true,
-                        error: None,
-                        size_bytes: size,
-                    });
-                }
-            }
-            Err(e) => {
-                let msg = if is_user_canceled(&e) {
-                    "用户取消授权".to_string()
-                } else {
-                    format!("授权移动失败: {}", e)
-                };
-                for (path, _) in needs_admin {
-                    details.push(MoveResult {
-                        path,
-                        success: false,
-                        error: Some(msg.clone()),
-                        size_bytes: 0,
-                    });
-                }
-            }
+async fn trash_with_admin(needs_admin: &[(String, u64)]) -> Vec<MoveResult> {
+    let paths: Vec<&str> = needs_admin.iter().map(|(p, _)| p.as_str()).collect();
+    match trash_via_admin_batch(&paths).await {
+        Ok(()) => needs_admin
+            .iter()
+            .map(|(path, size)| MoveResult {
+                path: path.clone(),
+                success: true,
+                error: None,
+                size_bytes: *size,
+            })
+            .collect(),
+        Err(e) => {
+            let error = if is_user_canceled(&e) {
+                UserError::new(ErrorCode::AUTHORIZATION_CANCELLED, "用户取消授权")
+            } else {
+                UserError::one(
+                    ErrorCode::MOVE_TO_TRASH_FAILED,
+                    format!("授权移动失败: {e}"),
+                    "reason",
+                    &e,
+                )
+            };
+            needs_admin
+                .iter()
+                .map(|(path, _)| MoveResult {
+                    path: path.clone(),
+                    success: false,
+                    error: Some(error.clone()),
+                    size_bytes: 0,
+                })
+                .collect()
         }
     }
-
-    build_report(target, details)
 }
 
 enum TrashOutcome {
@@ -105,7 +212,10 @@ async fn try_trash_user(path_str: &str) -> TrashOutcome {
         return TrashOutcome::Done(MoveResult {
             path: path_str.to_string(),
             success: false,
-            error: Some("文件不存在".to_string()),
+            error: Some(UserError::new(
+                ErrorCode::MOVE_TO_TRASH_FAILED,
+                "文件不存在",
+            )),
             size_bytes: 0,
         });
     }
@@ -140,14 +250,19 @@ async fn try_trash_user(path_str: &str) -> TrashOutcome {
         Err(e) => TrashOutcome::Done(MoveResult {
             path: path_str.to_string(),
             success: false,
-            error: Some(format!("移动失败: {}", e)),
+            error: Some(UserError::one(
+                ErrorCode::MOVE_TO_TRASH_FAILED,
+                format!("移动失败: {e}"),
+                "reason",
+                e,
+            )),
             size_bytes: 0,
         }),
     }
 }
 
 /// 通过 osascript 调用 Finder 移至废纸篓
-async fn trash_via_osascript(path_str: &str) -> Result<(), String> {
+async fn trash_via_osascript(path_str: &str) -> Result<(), UserError> {
     let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
         r#"use framework "Foundation"
@@ -164,11 +279,23 @@ end if"#,
         .args(["-e", &script])
         .output()
         .await
-        .map_err(|e| format!("启动 osascript 失败: {}", e))?;
+        .map_err(|e| {
+            UserError::one(
+                ErrorCode::MOVE_TO_TRASH_FAILED,
+                format!("启动 osascript 失败: {e}"),
+                "reason",
+                e,
+            )
+        })?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(err.trim().to_string());
+        return Err(UserError::one(
+            ErrorCode::MOVE_TO_TRASH_FAILED,
+            err.trim().to_string(),
+            "reason",
+            err.trim(),
+        ));
     }
     Ok(())
 }
@@ -191,31 +318,16 @@ fn try_rename_to_trash(path_str: &str) -> Result<(), std::io::Error> {
 
 /// 用 `do shell script ... with administrator privileges` 弹出系统授权框，
 /// 一次输入密码即可批量将多个路径移动到 ~/.Trash/。
-async fn trash_via_admin_batch(paths: &[&str]) -> Result<(), String> {
+async fn trash_via_admin_batch(paths: &[&str]) -> Result<(), UserError> {
     if paths.is_empty() {
         return Ok(());
     }
     let trash_dir = dirs::home_dir()
-        .ok_or_else(|| "无法获取用户主目录".to_string())?
+        .ok_or_else(|| UserError::new(ErrorCode::MOVE_TO_TRASH_FAILED, "无法获取用户主目录"))?
         .join(".Trash");
-    let trash_str = trash_dir.to_string_lossy().to_string();
-
-    // 拼接成 shell 命令：mv -f 'path1' 'trash/' ; mv -f 'path2' 'trash/' ; ...
-    // 用 `;` 而不是 `&&` —— 单个失败不影响其他
-    let mut shell_cmd = String::new();
-    for (i, p) in paths.iter().enumerate() {
-        if i > 0 {
-            shell_cmd.push_str(" ; ");
-        }
-        shell_cmd.push_str(&format!(
-            "/bin/mv -f {} {}",
-            shell_single_quote(p),
-            shell_single_quote(&trash_str)
-        ));
-    }
 
     // 转义为 AppleScript 字符串字面量
-    let as_escaped = applescript_quote(&shell_cmd);
+    let as_escaped = applescript_quote(&admin_move_script(paths, &trash_dir));
     let script = format!(
         r#"do shell script {} with administrator privileges"#,
         as_escaped
@@ -225,13 +337,41 @@ async fn trash_via_admin_batch(paths: &[&str]) -> Result<(), String> {
         .args(["-e", &script])
         .output()
         .await
-        .map_err(|e| format!("启动 osascript 失败: {}", e))?;
+        .map_err(|e| {
+            UserError::one(
+                ErrorCode::MOVE_TO_TRASH_FAILED,
+                format!("启动 osascript 失败: {e}"),
+                "reason",
+                e,
+            )
+        })?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(err.trim().to_string());
+        return Err(UserError::one(
+            ErrorCode::MOVE_TO_TRASH_FAILED,
+            err.trim().to_string(),
+            "reason",
+            err.trim(),
+        ));
     }
     Ok(())
+}
+
+pub(crate) fn admin_move_script(paths: &[&str], trash_dir: &Path) -> String {
+    let trash_str = trash_dir.to_string_lossy().to_string();
+    let mut shell_cmd = String::new();
+    for (index, path) in paths.iter().enumerate() {
+        if index > 0 {
+            shell_cmd.push_str(" ; ");
+        }
+        shell_cmd.push_str(&format!(
+            "/bin/mv -f {} {}",
+            shell_single_quote(path),
+            shell_single_quote(&trash_str)
+        ));
+    }
+    shell_cmd
 }
 
 /// 用单引号包裹 shell 参数，路径中若有 `'` 替换为 `'\''`
@@ -285,13 +425,14 @@ fn build_report(target: &UninstallTarget, details: Vec<MoveResult>) -> Uninstall
         moved_count,
         failed_count,
         details,
+        quit_error: None,
     }
 }
 
 /// 检查应用是否正在运行（通过 bundle 路径匹配进程）
 pub fn is_app_running(bundle_path: &str, sys: &mut sysinfo::System) -> bool {
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    for (_pid, proc) in sys.processes() {
+    for proc in sys.processes().values() {
         let Some(exe) = proc.exe() else { continue };
         let exe_str = exe.to_string_lossy();
         if exe_str.starts_with(bundle_path) {
@@ -301,38 +442,53 @@ pub fn is_app_running(bundle_path: &str, sys: &mut sysinfo::System) -> bool {
     false
 }
 
-/// 优雅退出应用并等待最多 5 秒，然后执行卸载
-pub async fn quit_and_uninstall(
-    app_name: &str,
-    target: &UninstallTarget,
-) -> Result<UninstallReport, String> {
-    // 发送优雅退出信号
-    let escaped_name = app_name.replace('"', "\\\"");
-    let script = format!(r#"tell application "{}" to quit"#, escaped_name);
-    let _ = tokio::process::Command::new("osascript")
-        .args(["-e", &script])
-        .output()
-        .await;
+pub(crate) fn quit_script(app_name: &str) -> String {
+    format!("tell application {} to quit", applescript_quote(app_name))
+}
 
-    // 等待最多 5 秒让应用退出
+pub(crate) async fn quit_app(app_name: &str) -> Result<(), UserError> {
+    let output = tokio::process::Command::new("osascript")
+        .args(["-e", &quit_script(app_name)])
+        .output()
+        .await
+        .map_err(|e| {
+            UserError::one(
+                ErrorCode::MOVE_TO_TRASH_FAILED,
+                format!("启动 osascript 失败: {e}"),
+                "reason",
+                e,
+            )
+        })?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(UserError::one(
+            ErrorCode::MOVE_TO_TRASH_FAILED,
+            err.trim().to_string(),
+            "reason",
+            err.trim(),
+        ));
+    }
+
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        // 检查 .app bundle 内的进程是否还在
         let check_script = format!(
-            r#"tell application "System Events" to (name of processes) contains "{}""#,
-            escaped_name
+            "tell application {} to (name of processes) contains {}",
+            applescript_quote("System Events"),
+            applescript_quote(app_name)
         );
-        let output = tokio::process::Command::new("osascript")
+        let checked = tokio::process::Command::new("osascript")
             .args(["-e", &check_script])
             .output()
             .await;
-        if let Ok(out) = output {
-            let result = String::from_utf8_lossy(&out.stdout);
-            if result.trim() == "false" {
+        if let Ok(out) = checked {
+            if String::from_utf8_lossy(&out.stdout).trim() == "false" {
                 break;
             }
         }
     }
-
-    Ok(uninstall_app(target).await)
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "uninstaller_tests.rs"]
+mod tests;

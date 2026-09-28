@@ -71,7 +71,7 @@ pub const COMMON_DEV_PORTS: &[u16] = &[
     6006, 6379, // storybook / redis
     7000, 7001, 7007, // misc dev
     8000, 8001, 8008, 8080, 8081, 8088, 8888, // python/django/jupyter
-    9000, 9001, 9090, 9200, 9229, // go/prometheus/elastic/node-inspect
+    9000, 9001, 9090, 9200, 9229,  // go/prometheus/elastic/node-inspect
     27017, // mongo
     5432, 5433, // postgres
     3306, 3307, // mysql

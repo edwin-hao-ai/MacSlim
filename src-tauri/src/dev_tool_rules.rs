@@ -86,9 +86,7 @@ fn build_docker_rule() -> DevToolRule {
 fn build_jetbrains_rule() -> DevToolRule {
     DevToolRule {
         bundle_id_pattern: "com.jetbrains.*".to_string(),
-        extra_paths: vec![
-            "~/Library/Application Support/JetBrains".to_string(),
-        ],
+        extra_paths: vec!["~/Library/Application Support/JetBrains".to_string()],
         label: "JetBrains 专属数据".to_string(),
     }
 }
@@ -97,10 +95,7 @@ fn build_jetbrains_rule() -> DevToolRule {
 fn build_android_studio_rule() -> DevToolRule {
     DevToolRule {
         bundle_id_pattern: "com.google.android.studio".to_string(),
-        extra_paths: vec![
-            "~/.android".to_string(),
-            "~/Library/Android".to_string(),
-        ],
+        extra_paths: vec!["~/.android".to_string(), "~/Library/Android".to_string()],
         label: "Android Studio 专属数据".to_string(),
     }
 }

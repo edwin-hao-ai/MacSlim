@@ -4,9 +4,15 @@
 //! （main + helper + renderer + gpu + plugin ...）。用户看活动监视器只关心
 //! 「我开了哪些应用、各占多少内存」，这个模块就做这个。
 
+use crate::operation_executor::{AppQuitter, DomainFuture};
+use crate::operations::{
+    AppIdentity, ApplicationSnapshotRegistration, InstalledAppIdentity, OperationStore,
+    ProcessIdentity, ProcessTarget,
+};
+use crate::user_error::{ErrorCode, UserError};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use sysinfo::System;
 
 #[derive(Serialize, Clone, Debug)]
@@ -14,6 +20,8 @@ pub struct AppChildProcess {
     pub pid: u32,
     pub parent_pid: Option<u32>,
     pub name: String,
+    pub exe: String,
+    pub start_time: u64,
     pub memory_mb: f64,
     pub cpu_percent: f32,
     pub ports: Vec<u16>,
@@ -23,9 +31,12 @@ pub struct AppChildProcess {
     pub depth: usize,
     /// 是否命中安全审计，允许用户手动终止但需要高亮提醒
     pub protected: bool,
-    pub protected_reason: Option<String>,
+    /// 受保护原因的 i18n key（`process.protect.*`）+ 插值参数，纯展示。
+    pub protected_reason_key: Option<String>,
+    pub protected_reason_params: crate::i18n_text::I18nParams,
     /// 是否在用户白名单（由上层注入）
     pub whitelisted: bool,
+    pub selection_key: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -58,6 +69,7 @@ pub struct AppInfo {
     pub protected_process_count: usize,
     /// 白名单子进程数量
     pub whitelisted_process_count: usize,
+    pub selection_key: String,
 }
 
 /// 列出所有运行中的 .app 应用
@@ -209,7 +221,15 @@ fn build_app_info(
         is_system,
         protected_process_count,
         whitelisted_process_count,
+        selection_key: String::new(),
     })
+}
+
+struct DfsContext<'a> {
+    main_pid: u32,
+    procs: &'a [(u32, &'a sysinfo::Process)],
+    children_of: &'a HashMap<u32, Vec<u32>>,
+    parent_pids: &'a std::collections::HashSet<u32>,
 }
 
 /// 以主进程为根，把 procs 按父子关系展开成带 depth 的扁平有序列表
@@ -242,10 +262,7 @@ fn build_children_tree(
     fn dfs(
         pid: u32,
         depth: usize,
-        main_pid: u32,
-        procs: &[(u32, &sysinfo::Process)],
-        children_of: &std::collections::HashMap<u32, Vec<u32>>,
-        parent_pids: &std::collections::HashSet<u32>,
+        context: &DfsContext<'_>,
         out: &mut Vec<AppChildProcess>,
         visited: &mut std::collections::HashSet<u32>,
     ) {
@@ -253,57 +270,50 @@ fn build_children_tree(
             return;
         }
         visited.insert(pid);
-        if let Some((_, proc)) = procs.iter().find(|(p, _)| *p == pid) {
+        if let Some((_, proc)) = context.procs.iter().find(|(p, _)| *p == pid) {
             let name = proc.name().to_string_lossy().to_string();
-            let protected_reason =
-                crate::process_safety::safety_veto(proc, &name, &parent_pids).map(str::to_string);
-            let protected = protected_reason.is_some();
-            let whitelisted = crate::whitelist::is_whitelisted(&name);
+            let protection =
+                crate::process_safety::evaluate_protection(proc, &name, context.parent_pids);
             out.push(AppChildProcess {
                 pid,
                 parent_pid: proc.parent().map(|p| p.as_u32()),
                 name,
+                exe: proc
+                    .exe()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                start_time: proc.start_time(),
                 memory_mb: proc.memory() as f64 / 1024.0 / 1024.0,
                 cpu_percent: proc.cpu_usage(),
                 ports: Vec::new(),
-                is_main: pid == main_pid,
+                is_main: pid == context.main_pid,
                 depth,
-                protected: protected || whitelisted,
-                protected_reason: if whitelisted {
-                    Some("命中白名单，默认不建议终止".to_string())
-                } else {
-                    protected_reason
-                },
-                whitelisted,
+                protected: protection.protected,
+                protected_reason_key: protection.reason.as_ref().map(|text| text.key.clone()),
+                protected_reason_params: protection
+                    .reason
+                    .as_ref()
+                    .map(|text| text.params.clone())
+                    .unwrap_or_default(),
+                whitelisted: protection.whitelisted,
+                selection_key: String::new(),
             });
         }
-        if let Some(children) = children_of.get(&pid) {
+        if let Some(children) = context.children_of.get(&pid) {
             for &c in children {
-                dfs(
-                    c,
-                    depth + 1,
-                    main_pid,
-                    procs,
-                    children_of,
-                    parent_pids,
-                    out,
-                    visited,
-                );
+                dfs(c, depth + 1, context, out, visited);
             }
         }
     }
 
-    let mut visited = std::collections::HashSet::new();
-    dfs(
-        main_pid,
-        0,
+    let context = DfsContext {
         main_pid,
         procs,
-        &children_of,
-        &parent_pids,
-        &mut result,
-        &mut visited,
-    );
+        children_of: &children_of,
+        parent_pids: &parent_pids,
+    };
+    let mut visited = std::collections::HashSet::new();
+    dfs(main_pid, 0, &context, &mut result, &mut visited);
 
     // 有些 orphan 进程父进程不在本应用范围内（比如直接从 launchd 起的 helper）
     // 按内存降序挂在 depth=0 下
@@ -320,16 +330,7 @@ fn build_children_tree(
             .unwrap_or(std::cmp::Reverse(0))
     });
     for o in orphans {
-        dfs(
-            o,
-            0,
-            main_pid,
-            procs,
-            &children_of,
-            &parent_pids,
-            &mut result,
-            &mut visited,
-        );
+        dfs(o, 0, &context, &mut result, &mut visited);
     }
 
     result
@@ -388,30 +389,224 @@ pub(crate) fn extract_plist_string(text: &str, key: &str) -> Option<String> {
     }
 }
 
-/// 优雅退出应用 —— 用 osascript 发 `tell application "X" to quit`
-/// 这会触发 macOS 的标准退出流程（保存未存文件、确认对话框等）
-pub async fn graceful_quit_app(bundle_name: &str) -> Result<(), String> {
-    // 反引号保护防止名字里有空格或特殊字符
-    let script = format!(
-        r#"tell application "{}" to quit"#,
-        bundle_name.replace('"', "\\\"")
-    );
-    let output = tokio::process::Command::new("osascript")
-        .args(["-e", &script])
-        .output()
-        .await
-        .map_err(|e| format!("启动 osascript 失败: {}", e))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(err.trim().to_string());
-    }
-    Ok(())
+/// 从展示视图构造后端应用身份（bundle + 子进程 identity）
+pub(crate) fn app_identities_from_infos(apps: &[AppInfo]) -> Vec<AppIdentity> {
+    apps.iter().map(app_identity_from_info).collect()
 }
 
-/// 强制退出：对 app 的所有 PID 调 graceful_kill（会走进程树清理）
-pub fn force_quit_app(all_pids: &[u32]) -> Vec<(u32, crate::process_ops::KillOutcome)> {
-    all_pids
-        .iter()
-        .map(|pid| (*pid, crate::process_ops::graceful_kill(*pid)))
-        .collect()
+fn app_identity_from_info(app: &AppInfo) -> AppIdentity {
+    AppIdentity {
+        bundle_path: app.bundle_path.clone(),
+        bundle_id: app.bundle_id.clone(),
+        app_name: app.name.clone(),
+        processes: app
+            .children
+            .iter()
+            .map(|child| ProcessTarget {
+                identity: ProcessIdentity {
+                    pid: child.pid,
+                    name: child.name.clone(),
+                    exe: child.exe.clone(),
+                    start_time: child.start_time,
+                },
+                protected: child.protected,
+                whitelisted: child.whitelisted,
+            })
+            .collect(),
+    }
+}
+
+/// 注册应用快照并把 app key / child key 回填到视图
+pub(crate) fn register_applications(
+    store: &mut OperationStore,
+    apps: &mut [AppInfo],
+) -> Result<ApplicationSnapshotRegistration, UserError> {
+    let registration = store.register_application_snapshot(app_identities_from_infos(apps))?;
+    for (app, key) in apps.iter_mut().zip(registration.app_keys.iter()) {
+        app.selection_key = key.clone();
+    }
+    let mut cursor = 0usize;
+    for (app, key) in apps.iter_mut().zip(registration.app_keys.iter()) {
+        for child in app.children.iter_mut() {
+            let binding = registration.child_bindings.get(cursor).ok_or_else(|| {
+                UserError::new(
+                    ErrorCode::APP_CHILD_SELECTION_MISMATCH,
+                    "子进程选择 key 数量与快照不一致",
+                )
+            })?;
+            if binding.app_key != *key || binding.pid != child.pid {
+                return Err(UserError::new(
+                    ErrorCode::APP_CHILD_SELECTION_MISMATCH,
+                    "子进程选择 key 不属于该应用",
+                ));
+            }
+            child.selection_key = binding.child_key.clone();
+            cursor += 1;
+        }
+    }
+    Ok(registration)
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct AppGracefulQuitReport {
+    pub app_name: String,
+    pub bundle_id: String,
+    /// 优雅退出失败原因：结构化错误，`None` 表示退出成功。
+    pub quit_error: Option<UserError>,
+}
+
+pub(crate) struct SystemAppQuitter;
+
+impl AppQuitter for SystemAppQuitter {
+    fn observe_apps(
+        &self,
+        bundle_paths: &[String],
+    ) -> DomainFuture<'_, Result<Vec<InstalledAppIdentity>, UserError>> {
+        let observed: Vec<InstalledAppIdentity> = bundle_paths
+            .iter()
+            .filter_map(|path| crate::uninstaller::read_installed_identity(Path::new(path)))
+            .collect();
+        Box::pin(async move { Ok(observed) })
+    }
+
+    fn quit(&self, app: &InstalledAppIdentity) -> DomainFuture<'_, Result<(), UserError>> {
+        let requested = app.app_name.clone();
+        Box::pin(async move { crate::uninstaller::quit_app(&requested).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::OperationStore;
+
+    fn child(pid: u32, name: &str, bundle: &str) -> AppChildProcess {
+        AppChildProcess {
+            pid,
+            parent_pid: None,
+            name: name.to_owned(),
+            exe: format!("/Applications/{bundle}.app/Contents/MacOS/{name}"),
+            start_time: 1_700_000_000 + u64::from(pid),
+            memory_mb: 1.0,
+            cpu_percent: 0.0,
+            ports: Vec::new(),
+            is_main: pid == 1,
+            depth: 0,
+            protected: false,
+            protected_reason_key: None,
+            protected_reason_params: Vec::new(),
+            whitelisted: false,
+            selection_key: String::new(),
+        }
+    }
+
+    fn app_info(bundle: &str) -> AppInfo {
+        AppInfo {
+            bundle_path: format!("/Applications/{bundle}.app"),
+            name: bundle.to_owned(),
+            bundle_id: format!("com.example.{bundle}"),
+            icon_base64: None,
+            main_pid: 1,
+            all_pids: vec![1, 2],
+            children: vec![child(1, bundle, bundle), child(2, "Helper", bundle)],
+            memory_mb: 2.0,
+            cpu_percent: 0.0,
+            uptime_secs: 60,
+            ports: Vec::new(),
+            is_system: false,
+            protected_process_count: 0,
+            whitelisted_process_count: 0,
+            selection_key: String::new(),
+        }
+    }
+
+    #[test]
+    fn app_identity_from_info_keeps_backend_process_identity() {
+        let info = app_info("Editor");
+        let identity = app_identity_from_info(&info);
+
+        assert_eq!(identity.bundle_path, "/Applications/Editor.app");
+        assert_eq!(identity.bundle_id, "com.example.Editor");
+        assert_eq!(identity.processes.len(), 2);
+        assert_eq!(identity.processes[0].identity.pid, 1);
+        assert_eq!(identity.processes[0].identity.exe, info.children[0].exe);
+        assert_eq!(
+            identity.processes[0].identity.start_time,
+            info.children[0].start_time
+        );
+        assert_eq!(identity.processes[1].identity.name, "Helper");
+        assert!(identity.processes.iter().all(|p| !p.protected));
+    }
+
+    #[test]
+    fn app_identity_processes_stay_inside_the_bundle() {
+        let info = app_info("Editor");
+        for target in app_identities_from_infos(&[info]) {
+            let prefix = format!("{}/", target.bundle_path);
+            for process in &target.processes {
+                assert!(
+                    process.identity.exe.starts_with(&prefix),
+                    "子进程 {} 不属于 bundle {}",
+                    process.identity.exe,
+                    target.bundle_path
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn register_applications_binds_app_and_child_selection_keys() {
+        let mut apps = vec![app_info("Editor"), app_info("Notes")];
+        let mut store = OperationStore::new();
+
+        let registration = register_applications(&mut store, &mut apps).unwrap();
+
+        assert_eq!(registration.app_keys.len(), 2);
+        assert_eq!(registration.child_bindings.len(), 4);
+        assert_eq!(apps[0].selection_key, registration.app_keys[0]);
+        assert_eq!(apps[1].selection_key, registration.app_keys[1]);
+        assert_eq!(
+            apps[0].children[0].selection_key,
+            registration.child_bindings[0].child_key
+        );
+        assert_eq!(
+            apps[0].children[1].selection_key,
+            registration.child_bindings[1].child_key
+        );
+        assert_eq!(
+            apps[1].children[0].selection_key,
+            registration.child_bindings[2].child_key
+        );
+        assert_eq!(
+            apps[1].children[1].selection_key,
+            registration.child_bindings[3].child_key
+        );
+        assert_ne!(apps[0].selection_key, apps[0].children[0].selection_key);
+    }
+
+    #[test]
+    fn real_apps_expose_backend_start_time_and_bundle_scoped_exe() {
+        let mut sys = System::new_all();
+        let apps = list_running_apps(&mut sys);
+        assert!(!apps.is_empty());
+
+        for app in &apps {
+            assert!(app.selection_key.is_empty());
+            let prefix = format!("{}/", app.bundle_path);
+            for child in &app.children {
+                assert!(
+                    child.start_time > 0,
+                    "PID {} 缺少后端 start_time",
+                    child.pid
+                );
+                assert!(child.selection_key.is_empty());
+                assert!(
+                    child.exe.starts_with(&prefix),
+                    "子进程 {} 不属于 bundle {}",
+                    child.exe,
+                    app.bundle_path
+                );
+            }
+        }
+    }
 }
