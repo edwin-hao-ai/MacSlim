@@ -416,6 +416,17 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   return invoke("get_system_health");
 }
 
+/**
+ * 当前构建形态：`"developer_id"` 或 `"mas"`。
+ *
+ * 后端 `flavor::CURRENT` 在**编译期**定死（`--features mas`），这里只是把它读
+ * 出来。`src/lib/flavor.ts` 用它决定「终止进程」这类沙箱里做不到的入口要不要
+ * 出现。
+ */
+export async function getBuildFlavor(): Promise<"developer_id" | "mas"> {
+  return invoke("get_build_flavor");
+}
+
 export async function scanAll(): Promise<SnapshotResult<ScanResult>> {
   return invoke("scan_all");
 }

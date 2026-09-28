@@ -5,6 +5,7 @@ pub mod cache_scanner;
 pub mod cli_operations;
 pub mod dev_tool_rules;
 pub mod docker;
+pub mod flavor;
 pub mod i18n_text;
 pub mod monitor;
 pub(crate) mod operation_commands;
@@ -50,6 +51,18 @@ pub struct AppState {
 
 fn whitelist_policy(state: &AppState) -> impl Fn(&str) -> bool + Send + Sync + 'static {
     process_whitelist_policy(state.storage.clone())
+}
+
+/// 下发当前构建形态（见 `flavor` 模块）。
+///
+/// 前端需要它来决定「终止进程」这类入口要不要出现 —— MAS 版在沙箱里终止不了
+/// 别的进程，与其让用户点一个注定失败的按钮、再弹一个「权限不足」（会被误
+/// 解成系统设置问题），不如直接把入口藏掉。
+///
+/// 纯元数据读取，无副作用，不碰任何用户数据。
+#[tauri::command]
+fn get_build_flavor() -> &'static str {
+    flavor::CURRENT.as_str()
 }
 
 // ========== System & Process ==========
@@ -258,23 +271,19 @@ async fn run_operation_plan(
     if !plan.kind().is_termination() {
         return operation_executor::execute_domain_plan(plan, domains).await;
     }
-    // MAS 构建形态不支持终止进程，见 ErrorCode::PROCESS_TERMINATION_UNSUPPORTED
-    // 的注释：沙箱禁止沙箱进程给其他进程发信号，且无 entitlement 可放行。
+    // 能不能终止进程只看 `flavor::CURRENT` —— 全项目只有这一处判断能力差异，
+    // 不散落 `cfg(feature = "mas")`。注意这只是**构建形态的能力差异**，
+    // 不是安全判定：判断依据是编译期常量，不掺任何文案、快照或用户输入。
     //
-    // 放在这里（进入 signaller 之前）而不是让 kill(2) 去撞 EPERM —— 后者会报成
-    // 「权限不足」，让用户以为是系统设置问题，而真实原因是这个构建压根没这能力。
-    //
-    // 注意这只是**构建形态的能力差异**，不是安全判定：判断依据是编译期的
-    // `feature = "mas"`，不掺任何文案、快照或用户输入。
-    #[cfg(feature = "mas")]
-    {
+    // 守卫放在进入 signaller 之前，而不是让 kill(2) 去撞 EPERM —— 后者会报成
+    // 「权限不足」，让用户以为是系统设置问题，真实原因是这构建压根没这能力。
+    if !flavor::CURRENT.can_terminate_processes() {
         return Err(UserError::with(
             ErrorCode::PROCESS_TERMINATION_UNSUPPORTED,
             "App Store 版运行在系统沙箱内，不能终止其他进程",
             vec![],
         ));
     }
-    #[cfg(not(feature = "mas"))]
     tauri::async_runtime::spawn_blocking(move || {
         let mut observer = process_ops::SystemProcessObserver::with_policy(policy);
         let mut signaller = process_ops::SystemProcessSignaller;
@@ -387,6 +396,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_build_flavor,
             get_system_health,
             scan_all,
             list_all_processes,

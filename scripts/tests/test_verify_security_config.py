@@ -262,13 +262,16 @@ class SecurityConfigTests(unittest.TestCase):
         self.assertEqual(len(capabilities["permissions"]), 13)
         self.assertEqual(MODULE.validate_capabilities(capabilities), [])
 
-    def test_operation_broker_ipc_surface_is_exactly_sixteen_trusted_commands(self):
+    def test_operation_broker_ipc_surface_is_exactly_seventeen_trusted_commands(self):
+        # 17 = 原 16 + `get_build_flavor`（纯元数据：下发 developer_id / mas，
+        # 让前端在 App Store 版里藏掉沙箱里做不到的「终止进程」入口）。
+        # 破坏性面仍必须精确等于 prepare + execute 两条 —— 下面单独断言。
         contract = MODULE.operation_contract
         root = SCRIPT_PATH.parents[1]
         lib = (root / "src-tauri/src/lib.rs").read_text(encoding="utf-8")
         commands = contract.rust_invoke_handler_commands(lib)
         self.assertEqual(commands, list(contract.EXPECTED_IPC_COMMANDS))
-        self.assertEqual(len(commands), 16)
+        self.assertEqual(len(commands), 17)
         self.assertEqual(sorted(contract.rust_declared_commands(lib)), sorted(commands))
         self.assertEqual(
             [name for name in commands if name in contract.DESTRUCTIVE_IPC_COMMANDS],

@@ -49,10 +49,21 @@ class RepositoryContractTests(unittest.TestCase):
     def test_repository_runs_its_own_validator(self):
         self.assertEqual(MODULE.validate_operation_contract_files(ROOT), [])
 
-    def test_repository_pins_the_sixteen_registered_ipc_commands(self):
+    def test_repository_pins_the_registered_ipc_commands(self):
+        # 17 条（原 16 + `get_build_flavor`）。新增那条是纯元数据读取：下发
+        # 当前构建形态，让前端能在 MAS 版里藏掉「终止进程」这个沙箱里做不到的
+        # 入口。**它是刻意的偏离**，不是顺手加的 ——
+        # 替代方案（Vite define 复制一份 flavor）会让 Rust 和前端出现两个真相源，
+        # 那正是 src-tauri/src/flavor.rs 的注释里明确警告的漂移。
+        # 要加/删命令时，先想清楚它属于 DESTRUCTIVE_IPC_COMMANDS 吗。
         commands = MODULE.rust_invoke_handler_commands(REPOSITORY_FILES["lib.rs"])
         self.assertEqual(commands, list(MODULE.EXPECTED_IPC_COMMANDS))
-        self.assertEqual(len(MODULE.EXPECTED_IPC_COMMANDS), 16)
+        self.assertEqual(len(MODULE.EXPECTED_IPC_COMMANDS), 17)
+        self.assertEqual(
+            [c for c in MODULE.EXPECTED_IPC_COMMANDS
+             if c in MODULE.DESTRUCTIVE_IPC_COMMANDS],
+            ["prepare_operation", "execute_operation"],
+        )
 
     def test_destructive_surface_is_exactly_prepare_and_execute(self):
         commands = MODULE.rust_invoke_handler_commands(REPOSITORY_FILES["lib.rs"])
@@ -201,7 +212,7 @@ class IpcCommandSurfaceTests(unittest.TestCase):
     def test_rejects_a_handler_without_any_command(self):
         source = self.base().replace("            check_app_running,", "            /* removed */")
         errors = MODULE.validate_ipc_command_surface(source)
-        self.assertTrue(mark_anything(errors, "generate_handler", "16 个可信 command"), errors)
+        self.assertTrue(mark_anything(errors, "generate_handler", "17 个可信 command"), errors)
         self.assertTrue(mark_anything(errors, "check_app_running"), errors)
 
 

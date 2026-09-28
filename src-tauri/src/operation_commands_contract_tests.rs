@@ -21,6 +21,9 @@ fn invoke_handler_only_exposes_trusted_commands() {
     assert_eq!(
         registered_commands(),
         vec![
+            // 纯元数据：下发构建形态（developer_id / mas），让前端在 App Store
+            // 版里藏掉沙箱里做不到的「终止进程」入口。零副作用。
+            "get_build_flavor",
             "get_system_health",
             "scan_all",
             "list_all_processes",

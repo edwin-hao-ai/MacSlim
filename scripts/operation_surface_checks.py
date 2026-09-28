@@ -30,6 +30,9 @@ RUST_QUOTES = _structure.RUST_QUOTES
 TS_QUOTES = _structure.TS_QUOTES
 
 EXPECTED_IPC_COMMANDS = (
+    # 纯元数据：下发当前构建形态（developer_id / mas），前端据此决定
+    # 「终止进程」这类沙箱里做不到的入口要不要出现。零副作用、不碰用户数据。
+    "get_build_flavor",
     "get_system_health",
     "scan_all",
     "list_all_processes",
