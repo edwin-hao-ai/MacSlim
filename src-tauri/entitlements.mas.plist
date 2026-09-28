@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Mac App Store 版的 entitlements。
+
+        App Store 上架**强制要求** App Sandbox（`com.apple.security.app-sandbox`），
+        这与 Developer ID 版用的是**两份不同的文件**：
+        - Developer ID 公证版：entitlements.plist（无沙箱）
+        - MAS 版：entitlements.mas.plist（本文件）
+
+        由 src-tauri/tauri.mas.conf.json 的 bundle.entitlements 选用。
+
+        为什么不用同一份：Developer ID 版必须**没有**沙箱 —— 它的全部价值建立在
+        「能读 ~/Library/Caches、能终止任意进程、能调 npm/brew/docker CLI」上，
+        套上沙箱等于把产品阉了。MAS 版则相反，不开沙箱根本过不了审核。
+        两份并存正是「双版本完全分离」在打包配置上的体现。
+
+        权限逐条说明：
+        - app-sandbox：MAS 上架的硬性要求
+        - files.user-selected.read-write：用户用文件选择器/废纸篓授权的路径
+        - files.all：读 ~/Library/Caches、~/.npm、~/.cargo 等。
+          这一条实际上仍需用户在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」
+          里显式授予（见 SettingsView 的 FDA 引导），entitlement 本身只是
+          允许 app 申请，不等于自动获得
+        - temporary-exception.*：MAS 不支持此键，因此**不写**。
+          Developer ID 版靠 SIP 也拿不到任意路径，这里靠 FDA + 用户选择器
+        - network.client：仅自动更新检查。MAS 版实际不注册 updater 插件，
+          保留是为了 dev 构建能通；正式 MAS 产物用不到
+        - 不含 automation.apple-events：MAS 版不该发 AppleEvent
+          （cache_cleaner.rs 的优雅退出路径在 MAS 下已不走）
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <key>com.apple.security.files.all</key>
+    <true/>
+
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

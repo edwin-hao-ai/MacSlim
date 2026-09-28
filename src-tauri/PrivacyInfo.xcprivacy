@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        App Store 要求的隐私清单（Privacy Manifest）。
+
+        只在 MAS 版里；由 src-tauri/tauri.mas.conf.json 的 bundle.resources 引入
+        打包。Developer ID 版不需要它。
+
+        声明的两类都是 Apple 明确要求必须声明的「required reason API」：
+
+        1. NSPrivacyAccessedAPICategoryFileTimestamp
+           用了 stat / fstat / getattrlist 之类读文件时间戳。
+           我们在 cache_scanner 判定「目录最近是否被改动过」时用它来决定
+           某份扫描快照是否过期，理由是 C617.1（防重放/防重算陈旧结论）。
+
+        2. NSPrivacyAccessedAPICategoryDiskSpace
+           用了 statfs / NSFileSystemFreeSize 查磁盘可用空间。
+           智能扫描页的「磁盘占用」环形图直接读它，理由是
+           E174.1（向用户展示本机磁盘用量）。
+
+        两个 NSPrivacyTracking 都是 false：MacSlim 无遥测、无第三方分析 SDK、
+        无数据出本机（见 docs 与隐私政策页）。NSPrivacyCollectedDataTypes 是空
+        数组 —— 我们不收集任何用户数据。
+    -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>E174.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -100,7 +100,7 @@ pub fn is_system_app(bundle_id: &str) -> bool {
 
 /// 从 .app bundle 读取图标并转为 base64 PNG
 /// 流程：Info.plist → CFBundleIconFile → .icns 路径 → sips 转 PNG → base64
-fn read_icon_base64(app_path: &Path, plist_path: &Path) -> Option<String> {
+fn read_icon_base64(app_path: &Path, plist_path: &Path, tmp_dir: &Path) -> Option<String> {
     let icon_name = read_icon_name(plist_path)?;
     let resources = app_path.join("Contents/Resources");
     // 图标文件可能带 .icns 后缀也可能不带
@@ -112,7 +112,7 @@ fn read_icon_base64(app_path: &Path, plist_path: &Path) -> Option<String> {
     if !icns_path.exists() {
         return None;
     }
-    icns_to_base64_png(&icns_path)
+    icns_to_base64_png(&icns_path, tmp_dir)
 }
 
 /// 供其他模块（如 applications.rs）调用的公共接口
@@ -121,7 +121,7 @@ pub fn read_icon_base64_for_bundle(bundle_path: &Path) -> Option<String> {
     if !plist_path.exists() {
         return None;
     }
-    read_icon_base64(bundle_path, &plist_path)
+    read_icon_base64(bundle_path, &plist_path, &std::env::temp_dir())
 }
 
 /// 从 Info.plist 读取图标文件名
@@ -145,14 +145,14 @@ fn read_icon_name(plist_path: &Path) -> Option<String> {
 }
 
 /// 用 sips 将 .icns 转为 64x64 PNG 并返回 base64 编码
-fn icns_to_base64_png(icns_path: &Path) -> Option<String> {
+fn icns_to_base64_png(icns_path: &Path, dir: &Path) -> Option<String> {
     use base64::Engine;
     // 临时文件名必须每次调用唯一：并行扫描时不同 app 会撞名。本机 15 个 app 的
     // CFBundleIconFile 都叫 "AppIcon.icns"，若共用同一个临时路径，并行的 sips
     // 会互相覆盖对方正在写/正在读的文件，导致图标随机损坏或整体丢失。
     static ICON_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = ICON_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = dir.join(format!(
         "macslim_icon_{}_{}_{}.png",
         std::process::id(),
         seq,
@@ -206,7 +206,7 @@ fn build_installed_app(app_path: &Path) -> Option<InstalledApp> {
     });
 
     let bid = bundle_id.unwrap_or_default();
-    let icon = read_icon_base64(app_path, &plist_path);
+    let icon = read_icon_base64(app_path, &plist_path, &std::env::temp_dir());
     let bundle_size = dir_size(app_path);
     let is_system = is_system_app(&bid);
 

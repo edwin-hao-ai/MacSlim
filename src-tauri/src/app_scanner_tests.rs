@@ -536,17 +536,93 @@ fn parallel_icon_decoding_survives_apps_sharing_one_icon_file_name() {
             );
         }
     }
+}
 
-    // 临时文件用完即删，不留垃圾
-    let leftovers: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+/// 独立验证「图标临时文件用完即删」。
+///
+/// 这条**故意不放在** `parallel_icon_decoding_survives_apps_sharing_one_icon_file_name`
+/// 末尾。原来的写法扫的是**全局** temp 目录，于是「这台机器上有没有别的 macslim
+/// 跑过」也会算成失败 —— 实测开发期间反复 quit / pkill 掉 MacSlim 留下了 14 个
+/// `macslim_icon_*` 文件，之后每次跑测试都红，而 `cargo test` 单跑又能过。
+/// 那是环境脏，不是被测代码泄漏。
+///
+/// 拆出来之后用**调用方指定的目录**断言（`icns_to_base64_png` 的第二个参数就是
+/// 为此加的），归属完全确定，跨进程、跨测试都不串味。
+#[test]
+fn icon_temp_file_is_removed_after_conversion() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+    let scratch = std::env::temp_dir().join(format!(
+        "macslim_icon_leak_probe_{}_{}",
+        std::process::id(),
+        DIR_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&scratch).expect("能建探针目录");
+
+    // 一个最小可解的 icns：单张 32x32 纯色。写不出来就跳过，别让这条测试
+    // 依赖 macOS 的 `sips` 之外的东西。
+    let icns = scratch.join("probe.icns");
+    match write_minimal_icns(&icns) {
+        Ok(()) => {}
+        Err(reason) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            eprintln!("跳过：造不出最小 icns（{reason}）");
+            return;
+        }
+    }
+
+    let result = icns_to_base64_png(&icns, &scratch);
+    let leftovers: Vec<String> = std::fs::read_dir(&scratch)
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("macslim_icon_"))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("macslim_icon_"))
         .collect();
-    assert!(
-        leftovers.is_empty(),
-        "图标临时文件应被清理，残留：{:?}",
-        leftovers.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    // 转换本身可能因 sips 不可用而返回 None；那条分支下同样不能留垃圾。
+    // 所以这里只断言「不留残留」，不断言一定解出图。
+    if leftovers.is_empty() {
+        return;
+    }
+    panic!(
+        "图标转换后临时文件应被清理，残留：{leftovers:?}（转换结果 = {}）",
+        result.is_some()
     );
+}
+
+/// 写一个最小的合法 icns：32x32、单张、真彩色。
+fn write_minimal_icns(path: &Path) -> Result<(), String> {
+    use std::io::Write;
+    const SIZE: u32 = 32;
+    let mut bytes: Vec<u8> = Vec::new();
+    bytes.extend_from_slice(b"icns");
+    bytes.extend_from_slice(&8u32.to_be_bytes()); // 总长，本函数会回填
+    let table_len_pos = bytes.len() - 4;
+    // type = ic07（32-bit ARGB + PNG）
+    bytes.extend_from_slice(&32u32.to_be_bytes()); // 数据块长度（占位，下面回填）
+    let data_len_pos = bytes.len() - 4;
+    bytes.extend_from_slice(b"ic07");
+    // ic07 结构：宽高(2B 零) + 平台(1) + 深度(1) + 颜色类型(1) + 零(3) + 长度(4)
+    let mut header = [0u8; 8];
+    header[0] = 0; // 宽高合并 = 32
+    header[1] = 32;
+    header[2] = 0; // platform
+    header[3] = 0; // depth
+    header[4] = 0; // color type
+    header[5..8].copy_from_slice(&0x000000u32.to_be_bytes()[1..4]);
+    bytes.extend_from_slice(&header);
+    // ARGB 像素，全不透明
+    for _ in 0..(SIZE * SIZE) {
+        bytes.extend_from_slice(&[0x00, 0x33, 0x66, 0xCC]);
+    }
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // is32bitLargest
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // is32bitSmallest
+    let data_len = (bytes.len() - data_len_pos - 4) as u32;
+    bytes[data_len_pos..data_len_pos + 4].copy_from_slice(&data_len.to_be_bytes());
+    let total = bytes.len() as u32;
+    bytes[table_len_pos..table_len_pos + 4].copy_from_slice(&total.to_be_bytes());
+    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())
 }

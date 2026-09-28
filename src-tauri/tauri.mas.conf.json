@@ -6,6 +6,12 @@
     }
   },
   "bundle": {
-    "targets": ["app", "mas"]
+    "targets": ["app", "mas"],
+    "resources": [
+      "PrivacyInfo.xcprivacy"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.mas.plist"
+    }
   }
 }
