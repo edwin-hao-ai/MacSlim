@@ -1,12 +1,21 @@
 {
   "name": "macslim",
   "private": true,
-  "version": "0.2.2",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
+    "build": "bun run typecheck && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "security:check": "python3 scripts/verify-security-config.py",
+    "verify:e2e": "python3 scripts/e2e_gui.py",
+    "test:python": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p \"test_*.py\"",
+    "test:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo test --manifest-path src-tauri/Cargo.toml --all-targets && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "verify:frontend": "bun run lint && bun run typecheck && bun run test && bun run test:python && bun run security:check && bun run build",
+    "verify": "bun run lint && bun run typecheck && bun run test && bun run test:python && bun run security:check && bun run test:rust && bun run build",
     "tauri": "tauri",
     "bundle:arm": "tauri build --target aarch64-apple-darwin",
     "bundle:intel": "tauri build --target x86_64-apple-darwin",
@@ -26,11 +35,15 @@
     "@tauri-apps/plugin-process": "^2.2.0"
   },
   "devDependencies": {
+    "@solidjs/testing-library": "0.8.10",
+    "@tailwindcss/vite": "^4.1.0",
     "@tauri-apps/cli": "^2.1.0",
+    "jsdom": "26.1.0",
+    "oxlint": "1.85.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.7.2",
     "vite": "^6.0.7",
     "vite-plugin-solid": "^2.11.0",
-    "typescript": "^5.7.2",
-    "tailwindcss": "^4.1.0",
-    "@tailwindcss/vite": "^4.1.0"
+    "vitest": "3.2.4"
   }
 }

@@ -3,22 +3,31 @@ import {
   createMemo,
   createSignal,
   For,
+  onCleanup,
   onMount,
   Show,
 } from "solid-js";
 import {
-  scanInstalledApps,
-  scanAppResidues,
-  uninstallApps,
   checkAppRunning,
-  quitAndUninstall,
+  classifyOperationError,
+  errorText,
+  executeOperation,
+  onResidueScanProgress,
+  prepareOperation,
+  scanAppResiduesBatch,
+  scanInstalledApps,
+  uninstallOperation,
   type InstalledApp,
-  type AppResidue,
+  type PreparedOperation,
+  type ResidueAppGroup,
   type ResidueItem,
-  type UninstallTarget,
+  type StageUpdate,
   type UninstallReport,
+  type UnlistenFn,
 } from "@/lib/tauri";
 import { fmtBytes } from "@/lib/format";
+import OperationConfirm from "@/components/OperationConfirm";
+import ScanStageProgress from "@/components/ScanStageProgress";
 import { useI18n } from "@/i18n";
 import {
   Search,
@@ -33,48 +42,87 @@ import {
   ChevronRight,
 } from "lucide-solid";
 
-// ========== 阶段枚举 ==========
-type Phase = "list" | "residue" | "confirm" | "running" | "large-confirm" | "uninstalling" | "done";
-
-const TEN_GB = 10 * 1024 * 1024 * 1024;
+type Phase =
+  | "list"
+  | "residue"
+  | "running"
+  | "uninstalling"
+  | "done";
 
 const UninstallerView: Component = () => {
-  const { t } = useI18n();
+  const { t, tText } = useI18n();
 
-  // 应用列表阶段
   const [apps, setApps] = createSignal<InstalledApp[]>([]);
+  const [appSnapshotId, setAppSnapshotId] = createSignal<string | null>(null);
   const [scanning, setScanning] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [hideSystem, setHideSystem] = createSignal(true);
   const [selectedApps, setSelectedApps] = createSignal(new Set<string>());
 
-  // 残留阶段
   const [phase, setPhase] = createSignal<Phase>("list");
-  const [residues, setResidues] = createSignal<AppResidue[]>([]);
+  const [residueGroups, setResidueGroups] = createSignal<ResidueAppGroup[]>([]);
+  const [residueSnapshotId, setResidueSnapshotId] = createSignal<string | null>(
+    null,
+  );
   const [residueLoading, setResidueLoading] = createSignal(false);
-  const [residueSelection, setResidueSelection] = createSignal(new Map<string, boolean>());
-  const [expandedCategories, setExpandedCategories] = createSignal(new Set<string>());
+  const [residueSelection, setResidueSelection] = createSignal(
+    new Map<string, boolean>(),
+  );
+  const [expandedCategories, setExpandedCategories] = createSignal(
+    new Set<string>(),
+  );
 
-  // 卸载阶段
   const [reports, setReports] = createSignal<UninstallReport[]>([]);
   const [runningApp, setRunningApp] = createSignal<InstalledApp | null>(null);
+  const [prepared, setPrepared] = createSignal<PreparedOperation | null>(null);
   const [forceQuitTimer, setForceQuitTimer] = createSignal(0);
+  const [error, setError] = createSignal<string | null>(null);
+  const [stageCurrent, setStageCurrent] = createSignal<string | null>(null);
+  const [residueDone, setResidueDone] = createSignal(0);
+  const [residueFound, setResidueFound] = createSignal(0);
 
-  // 扫描已安装应用
+  // onResidueScanProgress 是异步的：组件可能在它 resolve 之前就卸载。
+  // disposed 让「注册」和「解绑」两个动作在任何顺序下都不漏对方。
+  // 句柄用集合而不是单个变量：enterResiduePhase 可能被重复触发，
+  // 单槽会让后一次覆盖前一次，导致前一个监听永久泄漏。
+  let disposed = false;
+  const stageListeners = new Set<UnlistenFn>();
+
+  /** 取出并调用一个解绑句柄；已经释放过就什么都不做（保证恰好一次）。 */
+  const releaseStageListener = (unlisten: UnlistenFn) => {
+    if (!stageListeners.delete(unlisten)) return;
+    unlisten();
+  };
+
+  const releaseAllStageListeners = () => {
+    for (const unlisten of [...stageListeners]) releaseStageListener(unlisten);
+  };
+
+  onCleanup(() => {
+    disposed = true;
+    releaseAllStageListeners();
+  });
+
   const loadApps = async () => {
     setScanning(true);
     try {
-      setApps(await scanInstalledApps());
+      const snapshot = await scanInstalledApps();
+      setApps(snapshot.value);
+      setAppSnapshotId(snapshot.snapshot_id);
+      setSelectedApps(new Set<string>());
     } catch (e) {
-      console.error("扫描应用失败:", e);
+      setError(t("opError.failed", {
+        error: errorText(classifyOperationError(e), tText),
+      }));
     } finally {
       setScanning(false);
     }
   };
 
-  onMount(loadApps);
+  onMount(() => {
+    void loadApps();
+  });
 
-  // 过滤后的应用列表
   const filtered = createMemo(() => {
     const q = query().trim().toLowerCase();
     return apps().filter((a) => {
@@ -86,198 +134,227 @@ const UninstallerView: Component = () => {
     });
   });
 
-  // 切换应用选中
-  const toggleApp = (bundlePath: string) => {
+  const toggleApp = (key: string) => {
     const next = new Set(selectedApps());
-    next.has(bundlePath) ? next.delete(bundlePath) : next.add(bundlePath);
+    next.has(key) ? next.delete(key) : next.add(key);
     setSelectedApps(next);
   };
 
-  // 选中的应用对象列表
   const selectedAppList = createMemo(() =>
-    apps().filter((a) => selectedApps().has(a.bundle_path)),
+    apps().filter((a) => selectedApps().has(a.selection_key)),
   );
 
-  // 预估释放空间
   const estimatedFreeBytes = createMemo(() =>
-    selectedAppList().reduce((s, a) => s + a.bundle_size_bytes + a.estimated_residue_bytes, 0),
+    selectedAppList().reduce(
+      (s, a) => s + a.bundle_size_bytes + a.estimated_residue_bytes,
+      0,
+    ),
   );
 
-  // 进入残留扫描阶段
+  const onStageUpdate = (u: StageUpdate) => {
+    setStageCurrent(u.stage);
+    setResidueDone((n) => n + 1);
+    setResidueFound((n) => n + u.found_bytes);
+  };
+
   const enterResiduePhase = async () => {
-    const list = selectedAppList();
-    if (list.length === 0) return;
+    const currentAppSnapshot = appSnapshotId();
+    const keys = Array.from(selectedApps());
+    if (!currentAppSnapshot || keys.length === 0) return;
     setPhase("residue");
     setResidueLoading(true);
-    setResidues([]);
+    setResidueGroups([]);
+    setError(null);
+    setStageCurrent(null);
+    setResidueDone(0);
+    setResidueFound(0);
+    let unlisten: UnlistenFn | undefined;
     try {
-      const results = await Promise.all(
-        list.map((a) => scanAppResidues(a.bundle_id, a.name)),
-      );
-      setResidues(results);
-      // 默认全选所有残留
+      const registered = await onResidueScanProgress(onStageUpdate);
+      if (disposed) {
+        // 组件已卸载：立刻解绑，并且不再发起一次没人看的扫描
+        registered();
+        return;
+      }
+      unlisten = registered;
+      stageListeners.add(unlisten);
+      const snapshot = await scanAppResiduesBatch(currentAppSnapshot, keys);
+      setResidueGroups(snapshot.value);
+      setResidueSnapshotId(snapshot.snapshot_id);
       const sel = new Map<string, boolean>();
-      for (const r of results) {
-        for (const item of r.items) {
-          sel.set(item.path, item.selected);
+      for (const group of snapshot.value) {
+        for (const item of group.residue.items) {
+          sel.set(item.selection_key, item.selected);
         }
       }
       setResidueSelection(sel);
     } catch (e) {
-      console.error("残留扫描失败:", e);
+      setError(t("opError.failed", {
+        error: errorText(classifyOperationError(e), tText),
+      }));
+      setPhase("list");
     } finally {
+      if (unlisten) releaseStageListener(unlisten);
       setResidueLoading(false);
     }
   };
 
-  // 残留总大小（选中的）
   const selectedResidueBytes = createMemo(() => {
     const sel = residueSelection();
     let total = 0;
-    for (const r of residues()) {
-      for (const item of r.items) {
-        if (sel.get(item.path)) total += item.size_bytes;
+    for (const group of residueGroups()) {
+      for (const item of group.residue.items) {
+        if (sel.get(item.selection_key)) total += item.size_bytes;
       }
     }
     return total;
   });
 
-  // 总卸载大小
-  const totalUninstallBytes = createMemo(() =>
-    selectedAppList().reduce((s, a) => s + a.bundle_size_bytes, 0) + selectedResidueBytes(),
+  const totalUninstallBytes = createMemo(
+    () =>
+      selectedAppList().reduce((s, a) => s + a.bundle_size_bytes, 0) +
+      selectedResidueBytes(),
   );
 
-  // 切换残留项选中
-  const toggleResidue = (path: string) => {
+  const selectedResidueKeys = createMemo(() => {
+    const sel = residueSelection();
+    const keys: string[] = [];
+    for (const group of residueGroups()) {
+      for (const item of group.residue.items) {
+        if (sel.get(item.selection_key)) keys.push(item.selection_key);
+      }
+    }
+    return keys;
+  });
+
+  const toggleResidue = (key: string) => {
     const next = new Map(residueSelection());
-    next.set(path, !next.get(path));
+    next.set(key, !next.get(key));
     setResidueSelection(next);
   };
 
-  // 全选/取消全选残留
   const toggleAllResidues = (selectAll: boolean) => {
     const next = new Map<string, boolean>();
-    for (const r of residues()) {
-      for (const item of r.items) {
-        next.set(item.path, selectAll);
+    for (const group of residueGroups()) {
+      for (const item of group.residue.items) {
+        next.set(item.selection_key, selectAll);
       }
     }
     setResidueSelection(next);
   };
 
-  // 切换分类展开
   const toggleCategory = (key: string) => {
     const next = new Set(expandedCategories());
     next.has(key) ? next.delete(key) : next.add(key);
     setExpandedCategories(next);
   };
 
-  // 确认卸载流程
   const startUninstall = async () => {
-    // 检查是否有运行中的应用
+    setError(null);
     for (const app of selectedAppList()) {
-      if (app.is_running) {
-        try {
-          const running = await checkAppRunning(app.bundle_path);
-          if (running) {
-            setRunningApp(app);
-            setPhase("running");
-            setForceQuitTimer(5);
-            // 5 秒倒计时
-            const interval = window.setInterval(() => {
-              setForceQuitTimer((v) => {
-                if (v <= 1) { clearInterval(interval); return 0; }
-                return v - 1;
-              });
-            }, 1000);
-            return;
-          }
-        } catch { /* 检查失败则继续 */ }
+      if (!app.is_running) continue;
+      try {
+        if (await checkAppRunning(app.bundle_path)) {
+          setRunningApp(app);
+          setPhase("running");
+          setForceQuitTimer(5);
+          const interval = window.setInterval(() => {
+            setForceQuitTimer((v) => {
+              if (v <= 1) {
+                clearInterval(interval);
+                return 0;
+              }
+              return v - 1;
+            });
+          }, 1000);
+          return;
+        }
+      } catch {
+        /* the backend rejects running apps that are not running */
       }
     }
-    // 检查 >10GB 二次确认
-    if (totalUninstallBytes() > TEN_GB) {
-      setPhase("large-confirm");
-      return;
-    }
-    setPhase("confirm");
+    await requestUninstall(false);
   };
 
-  // 构建卸载目标
-  const buildTargets = (): UninstallTarget[] => {
-    const sel = residueSelection();
-    return selectedAppList().map((app) => {
-      const appResidue = residues().find((r) => r.app_name === app.name);
-      const paths = appResidue
-        ? appResidue.items.filter((i) => sel.get(i.path)).map((i) => i.path)
-        : [];
-      return {
-        bundle_path: app.bundle_path,
-        app_name: app.name,
-        bundle_id: app.bundle_id,
-        residue_paths: paths,
-      };
-    });
-  };
-
-  // 执行卸载
-  const doUninstall = async () => {
-    setPhase("uninstalling");
+  const requestUninstall = async (quitRunning: boolean) => {
+    const appSnapshot = appSnapshotId();
+    const residueSnapshot = residueSnapshotId();
+    if (!appSnapshot || !residueSnapshot) return;
+    setError(null);
     try {
-      const results = await uninstallApps(buildTargets());
-      setReports(results);
-      setPhase("done");
+      // prepare 只生成不可逆计划：真正的删除必须等用户在确认弹窗里点头。
+      setPrepared(
+        await prepareOperation(
+          uninstallOperation(
+            appSnapshot,
+            residueSnapshot,
+            Array.from(selectedApps()),
+            selectedResidueKeys(),
+            quitRunning,
+          ),
+        ),
+      );
     } catch (e) {
-      console.error("卸载失败:", e);
-      setPhase("done");
+      const info = classifyOperationError(e);
+      setError(t(`opError.${info.kind}`, { error: errorText(info, tText) }));
+      setPhase("residue");
     }
   };
 
-  // 退出并卸载
-  const doQuitAndUninstall = async () => {
-    const app = runningApp();
-    if (!app) return;
+  const executePrepared = async () => {
+    const operation = prepared();
+    if (!operation) return;
+    setPrepared(null);
     setPhase("uninstalling");
+    setError(null);
     try {
-      const targets = buildTargets();
-      const target = targets.find((t) => t.bundle_path === app.bundle_path);
-      if (target) {
-        const report = await quitAndUninstall(app.name, target);
-        // 处理剩余目标
-        const otherTargets = targets.filter((t) => t.bundle_path !== app.bundle_path);
-        const otherReports = otherTargets.length > 0 ? await uninstallApps(otherTargets) : [];
-        setReports([report, ...otherReports]);
-      } else {
-        const results = await uninstallApps(targets);
-        setReports(results);
+      const outcome = await executeOperation(operation.operation_id);
+      if (outcome.kind !== "uninstall") {
+        setPhase("done");
+        return;
       }
+      setReports(outcome.value);
       setPhase("done");
     } catch (e) {
-      console.error("退出并卸载失败:", e);
-      setPhase("done");
+      const info = classifyOperationError(e);
+      setError(t(`opError.${info.kind}`, { error: errorText(info, tText) }));
+      setPhase("residue");
     }
   };
 
-  // 完成摘要数据
-  const totalFreed = createMemo(() => reports().reduce((s, r) => s + r.total_freed_bytes, 0));
-  const totalMoved = createMemo(() => reports().reduce((s, r) => s + r.moved_count, 0));
-  const totalFailed = createMemo(() => reports().reduce((s, r) => s + r.failed_count, 0));
+  const totalFreed = createMemo(() =>
+    reports().reduce((s, r) => s + r.total_freed_bytes, 0),
+  );
+  const totalMoved = createMemo(() =>
+    reports().reduce((s, r) => s + r.moved_count, 0),
+  );
+  const totalFailed = createMemo(() =>
+    reports().reduce((s, r) => s + r.failed_count, 0),
+  );
+  const quitFailures = createMemo(() =>
+    reports()
+      .filter((r) => r.quit_error)
+      .map((r) => ({
+        app: r.app_name,
+        error: r.quit_error ? errorText(r.quit_error, tText) : "",
+      })),
+  );
 
-  // 重置回列表
   const resetToList = () => {
     setPhase("list");
     setSelectedApps(new Set<string>());
-    setResidues([]);
+    setResidueGroups([]);
+    setResidueSnapshotId(null);
     setResidueSelection(new Map<string, boolean>());
     setReports([]);
     setRunningApp(null);
-    loadApps();
+    setPrepared(null);
+    setError(null);
+    void loadApps();
   };
 
-  // ========== 渲染：应用列表阶段 ==========
   const AppListView = () => (
     <div class="flex flex-col h-full">
-      {/* 顶部工具栏 */}
       <div class="px-6 py-4 border-b border-black/5 dark:border-white/5 flex items-center gap-4">
         <label class="inline-flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 cursor-pointer">
           <input
@@ -311,7 +388,6 @@ const UninstallerView: Component = () => {
         </Show>
       </div>
 
-      {/* 应用列表 */}
       <div class="flex-1 overflow-y-auto p-4 space-y-2">
         <Show when={!scanning() && filtered().length === 0}>
           <div class="text-center py-20 text-sm text-zinc-500">{t("uninstaller.noApps")}</div>
@@ -336,19 +412,19 @@ const UninstallerView: Component = () => {
         </Show>
         <For each={filtered()}>
           {(app) => {
-            const isSelected = () => selectedApps().has(app.bundle_path);
+            const isSelected = () => selectedApps().has(app.selection_key);
             return (
               <div
                 class="card p-4 transition-all duration-200 hover:scale-[1.01] hover:shadow-md cursor-pointer"
                 classList={{ "ring-2 ring-brand-500/50": isSelected() }}
-                onClick={() => !app.is_system && toggleApp(app.bundle_path)}
+                onClick={() => !app.is_system && toggleApp(app.selection_key)}
               >
                 <div class="flex items-center gap-3">
                   <Show when={!app.is_system}>
                     <input
                       type="checkbox"
                       checked={isSelected()}
-                      onChange={() => toggleApp(app.bundle_path)}
+                      onChange={() => toggleApp(app.selection_key)}
                       onClick={(e) => e.stopPropagation()}
                       class="w-4 h-4 accent-brand-500 flex-shrink-0"
                     />
@@ -389,7 +465,6 @@ const UninstallerView: Component = () => {
         </For>
       </div>
 
-      {/* 底部操作栏 */}
       <Show when={selectedApps().size > 0}>
         <div class="px-6 py-3 border-t border-black/5 dark:border-white/5 flex items-center gap-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm">
           <span class="text-sm text-zinc-600 dark:text-zinc-300">
@@ -401,7 +476,7 @@ const UninstallerView: Component = () => {
           <button
             type="button"
             class="btn-primary gap-2 ml-auto"
-            onClick={enterResiduePhase}
+            onClick={() => void enterResiduePhase()}
           >
             <Trash2 size={16} />
             {t("uninstaller.uninstallSelected")}
@@ -411,29 +486,29 @@ const UninstallerView: Component = () => {
     </div>
   );
 
-  // ========== 渲染：残留详情阶段 ==========
   const ResidueView = () => {
-    // 按应用分组，每个应用内按 category 分组
-    const groupedResidues = createMemo(() => {
-      return residues().map((r) => {
+    const groupedResidues = createMemo(() =>
+      residueGroups().map((group) => {
         const groups = new Map<string, ResidueItem[]>();
-        for (const item of r.items) {
-          const cat = item.is_dev_tool ? t("uninstaller.devToolData") : item.category;
+        for (const item of group.residue.items) {
+          const cat = item.is_dev_tool
+            ? t("uninstaller.devToolData")
+            : item.category;
           if (!groups.has(cat)) groups.set(cat, []);
           groups.get(cat)!.push(item);
         }
-        return { ...r, groups: Array.from(groups.entries()) };
-      });
-    });
+        return { group, groups: Array.from(groups.entries()) };
+      }),
+    );
 
     const allSelected = createMemo(() => {
       const sel = residueSelection();
-      for (const r of residues()) {
-        for (const item of r.items) {
-          if (!sel.get(item.path)) return false;
+      for (const group of residueGroups()) {
+        for (const item of group.residue.items) {
+          if (!sel.get(item.selection_key)) return false;
         }
       }
-      return residues().some((r) => r.items.length > 0);
+      return residueGroups().some((group) => group.residue.items.length > 0);
     });
 
     return (
@@ -456,27 +531,35 @@ const UninstallerView: Component = () => {
 
         <div class="flex-1 overflow-y-auto p-4 space-y-4">
           <Show when={residueLoading()}>
-            <div class="flex items-center gap-2 text-sm text-zinc-500 py-8 justify-center">
-              <Loader2 size={16} class="animate-spin" />
-              {t("uninstaller.scanning")}
+            <div class="py-8">
+              <ScanStageProgress
+                current={stageCurrent()}
+                doneCount={residueDone()}
+                total={selectedAppList().length}
+                foundBytes={residueFound()}
+              />
             </div>
           </Show>
           <For each={groupedResidues()}>
-            {(appRes) => (
+            {({ group, groups }) => (
               <div class="card p-4 space-y-3">
                 <div class="flex items-center gap-2">
-                  <span class="font-semibold text-sm">{appRes.app_name}</span>
-                  <span class="text-xs text-zinc-500">{fmtBytes(appRes.total_bytes)}</span>
-                  <Show when={!appRes.scan_complete}>
+                  <span class="font-semibold text-sm">{group.residue.app_name}</span>
+                  <span class="text-xs text-zinc-500">
+                    {fmtBytes(group.residue.total_bytes)}
+                  </span>
+                  <Show when={!group.residue.scan_complete}>
                     <span class="px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-warning-500/15 text-warning-600">
                       {t("uninstaller.residueIncomplete")}
                     </span>
                   </Show>
                 </div>
-                <For each={appRes.groups}>
+                <For each={groups}>
                   {([category, items]) => {
-                    const catKey = () => `${appRes.bundle_id}:${category}`;
-                    const isOpen = () => expandedCategories().has(catKey()) || appRes.groups.length <= 3;
+                    const catKey = () =>
+                      `${group.residue.bundle_id}:${category}`;
+                    const isOpen = () =>
+                      expandedCategories().has(catKey()) || groups.length <= 3;
                     return (
                       <div>
                         <button
@@ -489,7 +572,8 @@ const UninstallerView: Component = () => {
                           </Show>
                           <span class="font-medium">{category}</span>
                           <span class="text-zinc-400">
-                            {items.length} · {fmtBytes(items.reduce((s, i) => s + i.size_bytes, 0))}
+                            {items.length} ·{" "}
+                            {fmtBytes(items.reduce((s, i) => s + i.size_bytes, 0))}
                           </span>
                         </button>
                         <Show when={isOpen()}>
@@ -499,8 +583,8 @@ const UninstallerView: Component = () => {
                                 <li class="flex items-center gap-2 py-1 text-xs hover:bg-black/[0.02] dark:hover:bg-white/[0.02] rounded px-1">
                                   <input
                                     type="checkbox"
-                                    checked={residueSelection().get(item.path) ?? false}
-                                    onChange={() => toggleResidue(item.path)}
+                                    checked={residueSelection().get(item.selection_key) ?? false}
+                                    onChange={() => toggleResidue(item.selection_key)}
                                     class="w-3.5 h-3.5 accent-brand-500"
                                   />
                                   <span class="truncate flex-1 font-mono text-zinc-500">{item.path}</span>
@@ -521,12 +605,21 @@ const UninstallerView: Component = () => {
           </For>
         </div>
 
-        {/* 底部操作栏 */}
+        <Show when={error()}>
+          <p class="px-6 py-2 text-xs text-danger-600 dark:text-danger-400" role="alert">
+            {error()}
+          </p>
+        </Show>
+
         <div class="px-6 py-3 border-t border-black/5 dark:border-white/5 flex items-center gap-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm">
           <span class="text-sm text-zinc-600 dark:text-zinc-300">
             {t("uninstaller.totalSize")}: {fmtBytes(totalUninstallBytes())}
           </span>
-          <button type="button" class="btn-primary gap-2 ml-auto" onClick={startUninstall}>
+          <button
+            type="button"
+            class="btn-primary gap-2 ml-auto"
+            onClick={() => void startUninstall()}
+          >
             <Trash2 size={16} />
             {t("uninstaller.uninstallSelected")}
           </button>
@@ -535,45 +628,6 @@ const UninstallerView: Component = () => {
     );
   };
 
-  // ========== 渲染：确认对话框 ==========
-  const ConfirmDialog = (props: { large?: boolean }) => (
-    <div class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-6 animate-fade-in" onClick={() => setPhase("residue")}>
-      <div class="card p-6 max-w-md w-full animate-slide-up" onClick={(e) => e.stopPropagation()}>
-        <div class="flex items-start gap-3">
-          <div class="w-10 h-10 rounded-xl bg-warning-500/15 flex items-center justify-center flex-shrink-0">
-            <AlertTriangle size={20} class="text-warning-600" />
-          </div>
-          <div class="flex-1">
-            <h3 class="font-semibold">
-              {props.large ? t("uninstaller.confirmLargeTitle") : t("uninstaller.confirmTitle")}
-            </h3>
-            <p class="text-sm text-zinc-500 mt-1">
-              {props.large ? t("uninstaller.confirmLargeMessage") : t("uninstaller.confirmMessage")}
-            </p>
-            <div class="mt-3 text-xs text-zinc-500">
-              {t("uninstaller.totalSize")}: {fmtBytes(totalUninstallBytes())}
-              {" · "}
-              {t("uninstaller.selectedCount", { count: selectedApps().size })}
-            </div>
-          </div>
-        </div>
-        <div class="flex justify-end gap-2 mt-5">
-          <button type="button" class="btn-ghost" onClick={() => setPhase("residue")}>
-            {t("uninstaller.cancel")}
-          </button>
-          <button
-            type="button"
-            class="inline-flex items-center justify-center rounded-xl px-5 py-2.5 font-medium bg-danger-500 hover:bg-danger-400 text-white shadow-sm transition-all"
-            onClick={doUninstall}
-          >
-            {t("uninstaller.confirm")}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  // ========== 渲染：运行中应用提示 ==========
   const RunningDialog = () => (
     <div class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-6 animate-fade-in" onClick={() => setPhase("residue")}>
       <div class="card p-6 max-w-md w-full animate-slide-up" onClick={(e) => e.stopPropagation()}>
@@ -596,7 +650,7 @@ const UninstallerView: Component = () => {
             <button
               type="button"
               class="inline-flex items-center justify-center rounded-xl px-5 py-2.5 font-medium bg-brand-500 hover:bg-brand-400 text-white shadow-sm transition-all"
-              onClick={doQuitAndUninstall}
+              onClick={() => void requestUninstall(true)}
             >
               {t("uninstaller.quitAndUninstall")}
             </button>
@@ -604,7 +658,7 @@ const UninstallerView: Component = () => {
             <button
               type="button"
               class="inline-flex items-center justify-center rounded-xl px-5 py-2.5 font-medium bg-danger-500 hover:bg-danger-400 text-white shadow-sm transition-all"
-              onClick={doQuitAndUninstall}
+              onClick={() => void requestUninstall(true)}
             >
               {t("uninstaller.forceQuitAndUninstall")}
             </button>
@@ -614,7 +668,6 @@ const UninstallerView: Component = () => {
     </div>
   );
 
-  // ========== 渲染：卸载中 ==========
   const UninstallingView = () => (
     <div class="flex flex-col items-center justify-center h-full gap-4">
       <Loader2 size={32} class="animate-spin text-brand-500" />
@@ -622,7 +675,6 @@ const UninstallerView: Component = () => {
     </div>
   );
 
-  // ========== 渲染：完成摘要 ==========
   const DoneView = () => (
     <div class="flex flex-col items-center justify-center h-full gap-6 p-6">
       <div class="w-16 h-16 rounded-full bg-success-500/15 flex items-center justify-center">
@@ -638,8 +690,22 @@ const UninstallerView: Component = () => {
         <Show when={totalFailed() > 0}>
           <div class="text-warning-600">{t("uninstaller.failedFiles", { count: totalFailed() })}</div>
         </Show>
+        <For each={quitFailures()}>
+          {(failure) => (
+            <div class="text-warning-600">
+              {t("uninstaller.quitFailedButRemoved", {
+                app: failure.app,
+                error: failure.error,
+              })}
+            </div>
+          )}
+        </For>
       </div>
-      {/* 失败项列表 */}
+      <Show when={error()}>
+        <p class="text-xs text-danger-600 dark:text-danger-400 text-center" role="alert">
+          {error()}
+        </p>
+      </Show>
       <Show when={totalFailed() > 0}>
         <div class="card p-4 w-full max-w-lg border-danger-500/20">
           <div class="flex items-center gap-2 mb-2">
@@ -651,7 +717,9 @@ const UninstallerView: Component = () => {
               {(detail) => (
                 <li class="flex gap-2">
                   <span class="truncate font-mono text-zinc-500 flex-1">{detail.path}</span>
-                  <span class="text-danger-500 flex-shrink-0">{detail.error}</span>
+                  <span class="text-danger-500 flex-shrink-0">
+                    {detail.error ? errorText(detail.error, tText) : ""}
+                  </span>
                 </li>
               )}
             </For>
@@ -664,7 +732,6 @@ const UninstallerView: Component = () => {
     </div>
   );
 
-  // ========== 主渲染 ==========
   return (
     <div class="h-full relative">
       <Show when={phase() === "list"}>
@@ -672,14 +739,6 @@ const UninstallerView: Component = () => {
       </Show>
       <Show when={phase() === "residue"}>
         <ResidueView />
-      </Show>
-      <Show when={phase() === "confirm"}>
-        <ResidueView />
-        <ConfirmDialog />
-      </Show>
-      <Show when={phase() === "large-confirm"}>
-        <ResidueView />
-        <ConfirmDialog large />
       </Show>
       <Show when={phase() === "running"}>
         <ResidueView />
@@ -690,6 +749,19 @@ const UninstallerView: Component = () => {
       </Show>
       <Show when={phase() === "done"}>
         <DoneView />
+      </Show>
+
+      <Show when={prepared()}>
+        {(operation) => (
+          <OperationConfirm
+            prepared={operation()}
+            title={t("opConfirm.title")}
+            confirmLabel={t("opConfirm.confirm")}
+            cancelLabel={t("uninstaller.cancel")}
+            onConfirm={() => void executePrepared()}
+            onCancel={() => setPrepared(null)}
+          />
+        )}
       </Show>
     </div>
   );

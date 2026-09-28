@@ -19,6 +19,9 @@ src-tauri/target/
 docs/downloads/
 docs/updates/
 
+# e2e 门禁产物（截图 + JSON 报告）
+artifacts/
+
 # Claude worktrees & AI 工作文件（不对外公开）
 .claude/
 CLAUDE.md
@@ -46,3 +49,12 @@ src-tauri/*.key.pub
 
 # 更新服务器配置（含私钥）
 updater-private-key.pem
+# MDDock local metadata (do not commit)
+.mddock/*
+# …but keep the workspace manifest tracked
+!.mddock/mddock.md
+
+.superpowers/
+*.p8
+AuthKey_*.p8
+private_keys/

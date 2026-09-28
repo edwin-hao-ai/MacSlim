@@ -61,12 +61,37 @@ function get(dict: Dict, path: string): string {
   return typeof cur === "string" ? cur : path;
 }
 
+/**
+ * 后端下发的插值参数（`[名, 值]` 二元组数组，Rust `Vec<(String, String)>` 的
+ * JSON 形状）转成 `t()` 认的记录。
+ *
+ * 后端必须用「key + 参数」而不是把文案拼好：文案只有前端词典知道。
+ */
+export function paramsToRecord(
+  params: ReadonlyArray<readonly [string, string]>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of params) out[name] = value;
+  return out;
+}
+
+export type TextParams = ReadonlyArray<readonly [string, string]>;
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
 type I18nCtx = {
   t: (key: string, params?: Record<string, string | number>) => string;
+  /** 渲染后端下发的「key + 参数」二元组。 */
+  tText: (key: string, params?: TextParams | null | undefined) => string;
+  /** 渲染扫描阶段名：固定阶段走 i18n key，残留扫描那条是应用名，原样显示。 */
+  tStage: (stage: string | null | undefined) => string;
   locale: Accessor<LocaleCode>;
   effectiveLocale: Accessor<"zh-CN" | "en">;
   setLocale: (l: LocaleCode) => void;
 };
+
+/** 扫描阶段名的 i18n 命名空间。后端 `cache_scanner.rs` 的阶段表全部落在这里。 */
+const STAGE_PREFIX = "scanStage.";
 
 const Ctx = createContext<I18nCtx>();
 
@@ -75,9 +100,17 @@ export function I18nProvider(props: { children: JSX.Element }) {
 
   const effective = () => resolve(locale());
 
-  const t = (key: string, params?: Record<string, string | number>) => {
+  const t: Translate = (key, params) => {
     const dict = DICTS[effective()];
     return interpolate(get(dict, key), params);
+  };
+
+  const tText = (key: string, params?: TextParams | null) =>
+    t(key, params ? paramsToRecord(params) : undefined);
+
+  const tStage = (stage: string | null | undefined) => {
+    const value = stage ?? "";
+    return value.startsWith(STAGE_PREFIX) ? t(value) : value;
   };
 
   const save = (l: LocaleCode) => {
@@ -93,6 +126,8 @@ export function I18nProvider(props: { children: JSX.Element }) {
     <Ctx.Provider
       value={{
         t,
+        tText,
+        tStage,
         locale,
         effectiveLocale: effective,
         setLocale: save,

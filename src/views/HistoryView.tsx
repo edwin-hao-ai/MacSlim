@@ -1,11 +1,11 @@
 import { Component, createSignal, For, onMount, Show } from "solid-js";
 import { getHistory, type HistoryEntry } from "@/lib/tauri";
 import { fmtBytes, fmtRelativeTime } from "@/lib/format";
-import { CheckCircle2, XCircle, Cpu, HardDrive, Loader2, Trash2, PowerOff, Zap } from "lucide-solid";
+import { CheckCircle2, XCircle, Cpu, HardDrive, Loader2, LogOut, Trash2, PowerOff, Zap } from "lucide-solid";
 import { useI18n } from "@/i18n";
 
 const HistoryView: Component = () => {
-  const { t } = useI18n();
+  const { t, effectiveLocale } = useI18n();
   const [entries, setEntries] = createSignal<HistoryEntry[]>([]);
   const [loading, setLoading] = createSignal(false);
 
@@ -23,18 +23,55 @@ const HistoryView: Component = () => {
 
   const opLabel = (op: string) => {
     switch (op) {
-      case "process_kill":
-        return t("history.opProcessKill");
-      case "cache_clean":
-        return t("history.opCacheClean");
-      case "app_uninstall":
-        return t("history.opAppUninstall");
-      case "app_quit":
-        return t("history.opAppQuit");
-      case "app_force_quit":
-        return t("history.opAppForceQuit");
+      case "process":
+        return t("history.opProcess");
+      case "app_terminate":
+        return t("history.opAppTerminate");
+      case "app_graceful_quit":
+        return t("history.opAppGracefulQuit");
+      case "uninstall":
+        return t("history.opUninstall");
+      case "docker":
+        return t("history.opDocker");
+      case "cache":
+        return t("history.opCache");
       default:
         return op;
+    }
+  };
+
+  const opTone = (op: string) => {
+    switch (op) {
+      case "process":
+        return {
+          wrap: "bg-brand-500/10",
+          icon: <Cpu size={16} class="text-brand-600" />,
+        };
+      case "app_graceful_quit":
+        return {
+          wrap: "bg-success-500/10",
+          icon: <LogOut size={16} class="text-success-600" />,
+        };
+      case "app_terminate":
+        return {
+          wrap: "bg-zinc-500/10",
+          icon: <PowerOff size={16} class="text-zinc-600" />,
+        };
+      case "uninstall":
+        return {
+          wrap: "bg-warning-500/10",
+          icon: <Trash2 size={16} class="text-warning-600" />,
+        };
+      case "docker":
+        return {
+          wrap: "bg-danger-500/10",
+          icon: <Zap size={16} class="text-danger-600" />,
+        };
+      default:
+        return {
+          wrap: "bg-success-500/10",
+          icon: <HardDrive size={16} class="text-success-600" />,
+        };
     }
   };
 
@@ -77,30 +114,8 @@ const HistoryView: Component = () => {
                           </div>
                         }
                       >
-                        <div
-                          class={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                            e.operation === "process_kill"
-                              ? "bg-brand-500/10"
-                              : e.operation === "app_uninstall"
-                                ? "bg-warning-500/10"
-                                : e.operation === "app_force_quit"
-                                  ? "bg-danger-500/10"
-                                  : e.operation === "app_quit"
-                                    ? "bg-zinc-500/10"
-                                    : "bg-success-500/10"
-                          }`}
-                        >
-                          {e.operation === "process_kill" ? (
-                            <Cpu size={16} class="text-brand-600" />
-                          ) : e.operation === "app_uninstall" ? (
-                            <Trash2 size={16} class="text-warning-600" />
-                          ) : e.operation === "app_force_quit" ? (
-                            <Zap size={16} class="text-danger-600" />
-                          ) : e.operation === "app_quit" ? (
-                            <PowerOff size={16} class="text-zinc-600" />
-                          ) : (
-                            <HardDrive size={16} class="text-success-600" />
-                          )}
+                        <div class={`w-9 h-9 rounded-lg flex items-center justify-center ${opTone(e.operation).wrap}`}>
+                          {opTone(e.operation).icon}
                         </div>
                       </Show>
                     </div>
@@ -126,7 +141,9 @@ const HistoryView: Component = () => {
                           +{fmtBytes(e.freed_bytes)}
                         </div>
                       </Show>
-                      <div>{fmtRelativeTime(e.timestamp)}</div>
+                      <div>
+                        {fmtRelativeTime(e.timestamp, t, effectiveLocale())}
+                      </div>
                     </div>
                   </li>
                 )}

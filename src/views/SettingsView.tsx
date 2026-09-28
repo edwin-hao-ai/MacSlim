@@ -45,7 +45,7 @@ function savePrefs(p: Prefs) {
 }
 
 const SettingsView: Component = () => {
-  const { t, locale, setLocale } = useI18n();
+  const { t, locale, setLocale, effectiveLocale } = useI18n();
   const [items, setItems] = createSignal<WhitelistEntry[]>([]);
   const [adding, setAdding] = createSignal(false);
   const [kind, setKind] = createSignal<"process" | "cache_path">("process");
@@ -403,7 +403,7 @@ const SettingsView: Component = () => {
                     </Show>
                   </div>
                   <div class="text-[10px] text-zinc-400">
-                    {fmtRelativeTime(w.added_at)}
+                    {fmtRelativeTime(w.added_at, t, effectiveLocale())}
                   </div>
                   <button
                     type="button"
@@ -422,7 +422,7 @@ const SettingsView: Component = () => {
       <div class="card p-6">
         <div class="text-sm font-medium mb-1">{t("settings.about")}</div>
         <div class="text-xs text-zinc-500 space-y-1">
-          <div>{t("settings.aboutLine1")}</div>
+          <div>{t("settings.aboutLine1", { version: currentVersion() })}</div>
           <div>{t("settings.aboutLine2")}</div>
           <div class="font-mono text-[10px] mt-2">{t("settings.aboutDb")}</div>
           <div class="font-mono text-[10px]">{t("settings.aboutCli")}</div>

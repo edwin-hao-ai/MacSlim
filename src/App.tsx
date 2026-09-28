@@ -1,4 +1,4 @@
-import { Component, createSignal, onMount } from "solid-js";
+import { Component, createSignal, onCleanup, onMount } from "solid-js";
 import Sidebar, { type ViewId } from "@/components/Sidebar";
 import ScanView from "@/views/ScanView";
 import CacheView from "@/views/CacheView";
@@ -7,8 +7,8 @@ import SettingsView from "@/views/SettingsView";
 import ProcessView from "@/views/ProcessView";
 import ApplicationsView from "@/views/ApplicationsView";
 import UninstallerView from "@/views/UninstallerView";
-import { listen } from "@tauri-apps/api/event";
-import { handleWindowDrag } from "@/lib/window-drag";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import AppShell from "@/components/shell/AppShell";
 import { useI18n } from "@/i18n";
 
 /** 用 CSS display 切换的 tab 面板，组件始终挂载不丢状态 */
@@ -25,36 +25,56 @@ const App: Component = () => {
   const { t } = useI18n();
   const [view, setView] = createSignal<ViewId>("scan");
 
-  onMount(() => {
-    listen<void>("tray:scan", () => {
-      setView("scan");
-    });
+  let unlistenTray: UnlistenFn | undefined;
+  let disposed = false;
+
+  const stopTrayListener = (unlisten: UnlistenFn | undefined) => {
+    if (!unlisten) return;
+    void Promise.resolve()
+      .then(() => unlisten())
+      .catch((error: unknown) => {
+        console.error("取消托盘扫描监听失败", error);
+      });
+  };
+
+  onMount(async () => {
+    try {
+      const registered = await listen<void>("tray:scan", () => {
+        setView("scan");
+      });
+      if (disposed) {
+        stopTrayListener(registered);
+        return;
+      }
+      unlistenTray = registered;
+    } catch (error: unknown) {
+      console.error("注册托盘扫描监听失败", error);
+    }
+  });
+
+  onCleanup(() => {
+    disposed = true;
+    stopTrayListener(unlistenTray);
+    unlistenTray = undefined;
   });
 
   return (
-    <div class="flex h-full bg-[rgb(var(--bg-app))/var(--bg-app-alpha)]">
-      <Sidebar current={view()} onChange={setView} />
-      <main class="flex-1 flex flex-col min-w-0">
-        <div
-          class="drag-region h-12 flex items-center px-6 border-b border-black/5 dark:border-white/5"
-          data-tauri-drag-region
-          onMouseDown={handleWindowDrag}
-        >
-          <h1 class="text-sm font-medium text-zinc-500 pointer-events-none">
-            {t(`nav.${view()}`)}
-          </h1>
-        </div>
-        <div class="flex-1 min-h-0 overflow-hidden" onMouseDown={handleWindowDrag}>
-          <TabPanel id="scan" active={view()}><ScanView /></TabPanel>
-          <TabPanel id="process" active={view()}><ProcessView /></TabPanel>
-          <TabPanel id="applications" active={view()}><ApplicationsView /></TabPanel>
-          <TabPanel id="cache" active={view()}><CacheView /></TabPanel>
-          <TabPanel id="uninstaller" active={view()}><UninstallerView /></TabPanel>
-          <TabPanel id="history" active={view()}><HistoryView /></TabPanel>
-          <TabPanel id="settings" active={view()}><SettingsView /></TabPanel>
-        </div>
-      </main>
-    </div>
+    <AppShell
+      sidebar={<Sidebar current={view()} onChange={setView} />}
+      toolbar={
+        <h1 class="pointer-events-none text-sm font-medium text-zinc-500">
+          {t(`nav.${view()}`)}
+        </h1>
+      }
+    >
+      <TabPanel id="scan" active={view()}><ScanView /></TabPanel>
+      <TabPanel id="process" active={view()}><ProcessView /></TabPanel>
+      <TabPanel id="applications" active={view()}><ApplicationsView /></TabPanel>
+      <TabPanel id="cache" active={view()}><CacheView /></TabPanel>
+      <TabPanel id="uninstaller" active={view()}><UninstallerView /></TabPanel>
+      <TabPanel id="history" active={view()}><HistoryView /></TabPanel>
+      <TabPanel id="settings" active={view()}><SettingsView /></TabPanel>
+    </AppShell>
   );
 };
 

@@ -1,5 +1,6 @@
 import {
   Component,
+  createMemo,
   createSignal,
   onCleanup,
   onMount,
@@ -9,11 +10,23 @@ import HealthCard from "@/components/HealthCard";
 import ProcessList from "@/components/ProcessList";
 import Welcome from "@/components/Welcome";
 import CleanupFlash from "@/components/CleanupFlash";
+import OperationConfirm, {
+  ProtectedForceConfirm,
+  type ProtectedRow,
+} from "@/components/OperationConfirm";
 import {
-  scanAll,
-  killProcesses,
   addWhitelist,
+  classifyOperationError,
+  errorText,
+  executeOperation,
+  prepareOperation,
+  processOperation,
+  scanAll,
+  type PreparedOperation,
+  type ProcessInfo,
+  type ProcessMode,
   type ScanResult,
+  type SnapshotResult,
   type SystemHealth,
 } from "@/lib/tauri";
 import { Sparkles, RefreshCw, Loader2 } from "lucide-solid";
@@ -24,27 +37,39 @@ import { useI18n } from "@/i18n";
 const WELCOME_SEEN_KEY = "macslim.welcome.seen";
 
 const ScanView: Component = () => {
-  const { t } = useI18n();
-  const [result, setResult] = createSignal<ScanResult | null>(null);
+  const { t, tText } = useI18n();
+  const [snapshot, setSnapshot] = createSignal<SnapshotResult<ScanResult> | null>(null);
   const [scanning, setScanning] = createSignal(false);
-  const [selected, setSelected] = createSignal(new Set<number>());
+  const [selected, setSelected] = createSignal(new Set<string>());
   const [optimizing, setOptimizing] = createSignal(false);
   const [message, setMessage] = createSignal<string | null>(null);
   const [showWelcome, setShowWelcome] = createSignal(
     localStorage.getItem(WELCOME_SEEN_KEY) !== "true",
   );
   const [showFlash, setShowFlash] = createSignal(false);
+  const [prepared, setPrepared] = createSignal<PreparedOperation | null>(null);
+  const [confirmForce, setConfirmForce] = createSignal<null | {
+    keys: string[];
+    protected: ProtectedRow[];
+  }>(null);
+
+  const processes = createMemo(() => snapshot()?.value.processes ?? []);
+
+  /** 默认选择只收「后端说可以默认选中且不受保护也不在白名单」的行。 */
+  const defaultSelectedKeys = (rows: ProcessInfo[]): string[] =>
+    rows
+      .filter(
+        (p) => p.default_select && !p.protected && !p.whitelisted,
+      )
+      .map((p) => p.selection_key);
 
   const runScan = async () => {
     setScanning(true);
     setMessage(null);
     try {
-      const r = await scanAll();
-      setResult(r);
-      const defaults = new Set(
-        r.processes.filter((p) => p.default_select).map((p) => p.pid),
-      );
-      setSelected(defaults);
+      const next = await scanAll();
+      setSnapshot(next);
+      setSelected(new Set(defaultSelectedKeys(next.value.processes)));
     } catch (e) {
       setMessage(t("scan.scanFailed", { error: String(e) }));
     } finally {
@@ -54,24 +79,53 @@ const ScanView: Component = () => {
 
   let unlistenHealth: UnlistenFn | undefined;
   let unlistenOptimize: UnlistenFn | undefined;
+  let disposed = false;
+
+  const stopListener = (unlisten: UnlistenFn | undefined, label: string) => {
+    if (!unlisten) return;
+    void Promise.resolve()
+      .then(() => unlisten())
+      .catch((error: unknown) => {
+        console.error(`取消${label}监听失败`, error);
+      });
+  };
+
   onMount(async () => {
-    if (!showWelcome()) {
-      await runScan();
+    try {
+      if (!showWelcome()) {
+        await runScan();
+      }
+      if (disposed) return;
+      const healthUnlisten = await listen<SystemHealth>("health:update", (e) => {
+        const current = snapshot();
+        if (!current) return;
+        setSnapshot({ ...current, value: { ...current.value, health: e.payload } });
+      });
+      if (disposed) {
+        stopListener(healthUnlisten, "健康更新");
+        return;
+      }
+      unlistenHealth = healthUnlisten;
+      // 托盘「一键优化」菜单触发
+      const optimizeUnlisten = await listen<void>("tray:optimize", async () => {
+        await runScan();
+        await optimize();
+      });
+      if (disposed) {
+        stopListener(optimizeUnlisten, "一键优化");
+        return;
+      }
+      unlistenOptimize = optimizeUnlisten;
+    } catch (error: unknown) {
+      console.error("注册扫描事件监听失败", error);
     }
-    unlistenHealth = await listen<SystemHealth>("health:update", (e) => {
-      const r = result();
-      if (!r) return;
-      setResult({ ...r, health: e.payload });
-    });
-    // 托盘「一键优化」菜单触发
-    unlistenOptimize = await listen<void>("tray:optimize", async () => {
-      await runScan();
-      await optimize();
-    });
   });
   onCleanup(() => {
-    unlistenHealth?.();
-    unlistenOptimize?.();
+    disposed = true;
+    stopListener(unlistenHealth, "健康更新");
+    stopListener(unlistenOptimize, "一键优化");
+    unlistenHealth = undefined;
+    unlistenOptimize = undefined;
   });
 
   const handleStart = async () => {
@@ -80,42 +134,69 @@ const ScanView: Component = () => {
     await runScan();
   };
 
-  const toggle = (pid: number) => {
+  const toggle = (selectionKey: string) => {
     const next = new Set(selected());
-    next.has(pid) ? next.delete(pid) : next.add(pid);
+    next.has(selectionKey) ? next.delete(selectionKey) : next.add(selectionKey);
     setSelected(next);
   };
 
+  const requestOptimize = async (keys: string[], mode: ProcessMode) => {
+    const current = snapshot();
+    if (!current || keys.length === 0) return;
+    setMessage(null);
+    try {
+      setPrepared(
+        await prepareOperation(processOperation(current.snapshot_id, keys, mode)),
+      );
+    } catch (e) {
+      await runScan();
+      const info = classifyOperationError(e);
+      setMessage(t(`opError.${info.kind}`, { error: errorText(info, tText) }));
+    }
+  };
+
   const optimize = async () => {
-    const pids = Array.from(selected());
-    if (pids.length === 0) return;
-    const procs = result()?.processes ?? [];
-    const names = pids.map(
-      (pid) => procs.find((p) => p.pid === pid)?.name ?? String(pid),
+    const keys = Array.from(selected());
+    if (keys.length === 0) return;
+    // 受保护目标只能强制终止：先显式确认，绝不把整批默认选择塞进 graceful 然后整批失败。
+    const protectedRows = processes().filter(
+      (p) => keys.includes(p.selection_key) && p.protected,
     );
+    if (protectedRows.length > 0) {
+      setConfirmForce({ keys, protected: protectedRows });
+      return;
+    }
+    await requestOptimize(keys, "graceful");
+  };
+
+  const executePrepared = async () => {
+    const operation = prepared();
+    if (!operation) return;
+    setPrepared(null);
     setOptimizing(true);
     setMessage(null);
     try {
-      const r = await killProcesses(pids, names);
-      let msg = t("scan.killSuccess", { count: r.killed.length });
-      if (r.failed.length > 0) {
-        msg += t("scan.killPartial", { failed: r.failed.length });
-        // 把失败的原因拼进 message
-        const failReasons = r.details
+      const outcome = await executeOperation(operation.operation_id);
+      if (outcome.kind !== "process") return;
+      let msg = t("scan.killSuccess", { count: outcome.value.killed.length });
+      if (outcome.value.failed.length > 0) {
+        msg += t("scan.killPartial", { failed: outcome.value.failed.length });
+        const failReasons = outcome.value.details
           .filter((d) => !d.success)
-          .map((d) => `${d.name}: ${d.message}`)
+          .map((d) => `${d.name}: ${errorText(d.message, tText)}`)
           .join("；");
         if (failReasons) msg += ` —— ${failReasons}`;
       }
       setMessage(msg);
-      // 有成功终止的进程时触发光晕 + 音效
-      if (r.killed.length > 0) {
+      if (outcome.value.killed.length > 0) {
         setShowFlash(true);
         void playCleanSuccessSound();
       }
       await runScan();
     } catch (e) {
-      setMessage(t("scan.optimizeFailed", { error: String(e) }));
+      await runScan();
+      const info = classifyOperationError(e);
+      setMessage(t(`opError.${info.kind}`, { error: errorText(info, tText) }));
     } finally {
       setOptimizing(false);
     }
@@ -125,10 +206,10 @@ const ScanView: Component = () => {
     <Show when={!showWelcome()} fallback={<Welcome onStart={handleStart} />}>
       <div class="flex flex-col gap-5 p-6 h-full overflow-y-auto">
         <CleanupFlash visible={showFlash()} onDone={() => setShowFlash(false)} />
-        <HealthCard health={result()?.health ?? null} />
+        <HealthCard health={snapshot()?.value.health ?? null} />
 
         <ProcessList
-          processes={result()?.processes ?? []}
+          processes={processes()}
           selected={selected()}
           onToggle={toggle}
           onWhitelist={async (name) => {
@@ -178,6 +259,37 @@ const ScanView: Component = () => {
             {t("common.notice_irreversible")}
           </span>
         </div>
+
+        <Show when={confirmForce()}>
+          {(d) => (
+            <ProtectedForceConfirm
+              title={t("scan.confirmProtectedTitle")}
+              message={t("scan.confirmProtectedMessage")}
+              confirmLabel={t("scan.forceTerminate")}
+              cancelLabel={t("common.cancel")}
+              rows={d().protected}
+              onConfirm={() => {
+                const info = d();
+                setConfirmForce(null);
+                void requestOptimize(info.keys, "force");
+              }}
+              onCancel={() => setConfirmForce(null)}
+            />
+          )}
+        </Show>
+
+        <Show when={prepared()}>
+          {(operation) => (
+            <OperationConfirm
+              prepared={operation()}
+              title={t("opConfirm.title")}
+              confirmLabel={t("opConfirm.confirm")}
+              busy={optimizing()}
+              onConfirm={() => void executePrepared()}
+              onCancel={() => setPrepared(null)}
+            />
+          )}
+        </Show>
       </div>
     </Show>
   );

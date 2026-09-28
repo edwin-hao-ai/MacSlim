@@ -149,19 +149,6 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  .drag-region {
-    -webkit-app-region: drag;
-    -webkit-user-select: none;
-    user-select: none;
-    cursor: default;
-  }
-  .drag-region * {
-    -webkit-user-select: none;
-    user-select: none;
-  }
-  .no-drag {
-    -webkit-app-region: no-drag;
-  }
 }
 
 @layer components {
@@ -434,6 +421,39 @@
     .cleanup-flash-ring {
       border-color: rgba(34, 211, 238, 0.3);
       box-shadow: 0 0 20px rgba(16, 185, 129, 0.18);
+    }
+  }
+
+  /* ── 斜线网格：标记「可清理空间」（借鉴 disktree） ──
+   *
+   * 纯 CSS，无图片资源、无新增依赖：`repeating-linear-gradient` 叠在分类徽章
+   * 已有的 `background-color` 之上，所以 11 个分类各自的配色原样保留。
+   *
+   * 三条约束：
+   * 1. **文字对比度不降**。条纹用 `currentColor` 的低透明度描线（浅色 8% /
+   *    深色 14%），只落在徽章的浅色底上，不压住 `text-*-600` 的文字色；
+   *    2px 线 / 6px 间距，肉眼是「质感」而不是「网格线」。
+   * 2. **无动画**。它是静态渐变，因此 `prefers-reduced-motion: reduce` 下
+   *    表现完全一致 —— 不需要（也不应该）在这里加任何 media query 关掉它。
+   *    真要加一个 `transition` 才是给用户添麻烦。
+   * 3. **判定不靠这个类**。类名只反映「这一组是不是可清理空间」这个视觉事实，
+   *    判断逻辑在 `format.ts` 的 `isCategoryReclaimable`（读 `CacheItem.safety`），
+   *    样式里不含任何分类名单。
+   */
+  .reclaimable-hatch {
+    background-image: repeating-linear-gradient(
+      135deg,
+      rgb(from currentColor r g b / 0.08) 0 2px,
+      transparent 2px 6px
+    );
+  }
+  @media (prefers-color-scheme: dark) {
+    .reclaimable-hatch {
+      background-image: repeating-linear-gradient(
+        135deg,
+        rgb(from currentColor r g b / 0.14) 0 2px,
+        transparent 2px 6px
+      );
     }
   }
 

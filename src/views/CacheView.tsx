@@ -9,17 +9,28 @@ import {
   Show,
 } from "solid-js";
 import {
-  cleanCache,
+  cacheOperation,
+  classifyOperationError,
+  errorText,
+  executeOperation,
+  onCacheScanProgress,
+  prepareOperation,
   scanCache,
   type CacheItem,
-  type CacheScanResult,
+  type CacheSnapshotView,
   type CleanSummary,
+  type Keyed,
+  type PreparedOperation,
+  type SnapshotResult,
+  type StageUpdate,
+  type UnlistenFn,
 } from "@/lib/tauri";
 import {
   CATEGORY_COLORS,
-  CATEGORY_LABELS,
+  categoryLabel,
   fmtBytes,
   fmtDuration,
+  isCategoryReclaimable,
 } from "@/lib/format";
 import DockerSection from "@/components/DockerSection";
 import {
@@ -29,13 +40,15 @@ import {
   playCleanSuccessSound,
 } from "@/lib/cleanFeedback";
 import CleanupFlash from "@/components/CleanupFlash";
+import OperationConfirm from "@/components/OperationConfirm";
+import ScanStageProgress from "@/components/ScanStageProgress";
 import { CheckCircle2, Loader2, RefreshCw, Sparkles, XCircle } from "lucide-solid";
 import {
   isPermissionGranted,
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { useI18n, getT } from "@/i18n";
+import { useI18n, getT, paramsToRecord } from "@/i18n";
 
 function isNotifyEnabled(): boolean {
   try {
@@ -66,59 +79,147 @@ async function notifyCleanComplete(bytes: number, count: number) {
   }
 }
 
+/**
+ * 缓存扫描的阶段总数，只用于算进度条百分比。
+ *
+ * 真源是后端 `src-tauri/src/cache_scanner.rs` 里的 `EXPECTED_STAGES`
+ * （测试 `stage_table_declares_exactly_the_sixteen_expected_stages` 钉死了
+ * 「阶段表恰好 16 个扫描器、阶段名逐个一致」）。
+ *
+ * 后端增删阶段时**必须同步改这里**。不同步的后果：进度条按错误的分母算，
+ * 永远到不了 100%（或提前跑满），但不会崩、不会报错，只是进度条失真。
+ * 载荷的 4 个字段是安全约束，不允许为此加 `stage_total`，所以只能靠这道注释。
+ */
+const CACHE_STAGE_TOTAL = 16;
+
 const CacheView: Component = () => {
-  const { t } = useI18n();
-  const [result, setResult] = createSignal<CacheScanResult | null>(null);
+  const { t, tText } = useI18n();
+  const [snapshot, setSnapshot] = createSignal<SnapshotResult<CacheSnapshotView> | null>(null);
   const [scanning, setScanning] = createSignal(false);
   const [selected, setSelected] = createSignal(new Set<string>());
   const [cleaning, setCleaning] = createSignal(false);
   const [summary, setSummary] = createSignal<CleanSummary | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
   const [cleanProgress, setCleanProgress] = createSignal(0);
   const [displayFreedBytes, setDisplayFreedBytes] = createSignal(0);
   const [showFlash, setShowFlash] = createSignal(false);
+  const [pending, setPending] = createSignal<PreparedOperation | null>(null);
+  const [stageCurrent, setStageCurrent] = createSignal<string | null>(null);
+  const [stageDone, setStageDone] = createSignal(0);
+  const [stageFound, setStageFound] = createSignal(0);
 
   let progressTimer: number | undefined;
   let cancelBytesAnimation: (() => void) | undefined;
+  // onCacheScanProgress 是异步的：组件可能在它 resolve 之前就卸载。
+  // disposed 让「注册」和「解绑」两个动作在任何顺序下都不漏对方。
+  // 句柄用集合而不是单个变量：runScan 可能重入（prepareOperation 失败会重扫，
+  // 连点两次清理按钮就会有两个 runScan 同时在飞），单槽会让后一次覆盖前一次。
+  let disposed = false;
+  const stageListeners = new Set<UnlistenFn>();
+
+  /** 取出并调用一个解绑句柄；已经释放过就什么都不做（保证恰好一次）。 */
+  const releaseStageListener = (unlisten: UnlistenFn) => {
+    if (!stageListeners.delete(unlisten)) return;
+    unlisten();
+  };
+
+  const releaseAllStageListeners = () => {
+    for (const unlisten of [...stageListeners]) releaseStageListener(unlisten);
+  };
+
+  const onStageUpdate = (u: StageUpdate) => {
+    if (u.state === "running") {
+      setStageCurrent(u.stage);
+      return;
+    }
+    setStageDone((n) => n + 1);
+    setStageFound((n) => n + u.found_bytes);
+  };
 
   const runScan = async () => {
     setScanning(true);
     setSummary(null);
+    setStageCurrent(null);
+    setStageDone(0);
+    setStageFound(0);
+    let unlisten: UnlistenFn | undefined;
     try {
-      const r = await scanCache();
-      setResult(r);
-      const defaults = new Set(
-        r.items.filter((i) => i.default_select).map((i) => i.id),
+      const registered = await onCacheScanProgress(onStageUpdate);
+      if (disposed) {
+        // 组件已卸载：立刻解绑，并且不再发起一次没人看的扫描
+        registered();
+        return;
+      }
+      unlisten = registered;
+      stageListeners.add(unlisten);
+      const snapshotResult = await scanCache();
+      setSnapshot(snapshotResult);
+      setSelected(
+        new Set(
+          snapshotResult.value.items
+            .filter((item) => item.default_select)
+            .map((item) => item.selection_key),
+        ),
       );
-      setSelected(defaults);
     } catch (e) {
       console.error(e);
     } finally {
+      if (unlisten) releaseStageListener(unlisten);
       setScanning(false);
     }
   };
 
   onMount(runScan);
   onCleanup(() => {
+    disposed = true;
+    releaseAllStageListeners();
     if (progressTimer) window.clearInterval(progressTimer);
     cancelBytesAnimation?.();
   });
 
-  const toggle = (id: string) => {
+  const items = createMemo<Keyed<CacheItem>[]>(() => snapshot()?.value.items ?? []);
+
+  const toggle = (key: string) => {
     const next = new Set(selected());
-    next.has(id) ? next.delete(id) : next.add(id);
+    next.has(key) ? next.delete(key) : next.add(key);
     setSelected(next);
   };
 
-  const selectedBytes = createMemo(() => {
-    const items = result()?.items ?? [];
-    return items
-      .filter((i) => selected().has(i.id))
-      .reduce((s, i) => s + i.size_bytes, 0);
-  });
+  const selectedBytes = createMemo(() =>
+    items()
+      .filter((item) => selected().has(item.selection_key))
+      .reduce((sum, item) => sum + item.size_bytes, 0),
+  );
 
-  const runClean = async () => {
-    const items = (result()?.items ?? []).filter((i) => selected().has(i.id));
-    if (items.length === 0) return;
+  const selectedKeys = createMemo(() =>
+    items()
+      .filter((item) => selected().has(item.selection_key))
+      .map((item) => item.selection_key),
+  );
+
+  const showError = (thrown: unknown) => {
+    const info = classifyOperationError(thrown);
+    setError(t(`opError.${info.kind}`, { error: errorText(info, tText) }));
+  };
+
+  const requestClean = async () => {
+    const current = snapshot();
+    const keys = selectedKeys();
+    if (!current || keys.length === 0) return;
+    setError(null);
+    try {
+      // 破坏性动作先停在 prepare：把后端算好的摘要与估算交给用户确认，
+      // 用户点了确认才 execute（AGENTS.md §4.1 / §4.5）。
+      setPending(
+        await prepareOperation(cacheOperation(current.snapshot_id, keys)),
+      );
+    } catch (e) {
+      showError(e);
+      await runScan();
+    }
+  };
+
+  const startProgress = () => {
     setCleaning(true);
     setSummary(null);
     setCleanProgress(0.08);
@@ -128,21 +229,33 @@ const CacheView: Component = () => {
     progressTimer = window.setInterval(() => {
       setCleanProgress((prev) => Math.min(prev + (prev < 0.6 ? 0.06 : 0.025), 0.92));
     }, 180);
+  };
+
+  const confirmClean = async () => {
+    const prepared = pending();
+    if (!prepared) return;
+    setPending(null);
+    startProgress();
     try {
-      const s = await cleanCache(items);
-      setSummary(s);
+      const outcome = await executeOperation(prepared.operation_id);
+      if (outcome.kind !== "cache") return;
+      setSummary(outcome.value);
       setCleanProgress(1);
       await runScan();
-      await notifyCleanComplete(s.total_freed_bytes, s.success_count);
-      if (s.success_count > 0) {
+      await notifyCleanComplete(
+        outcome.value.total_freed_bytes,
+        outcome.value.success_count,
+      );
+      if (outcome.value.success_count > 0) {
         setShowFlash(true);
         void playCleanSuccessSound();
       } else {
         void playCleanFailureSound();
       }
     } catch (e) {
-      console.error(e);
+      showError(e);
       void playCleanFailureSound();
+      await runScan();
     } finally {
       if (progressTimer) {
         window.clearInterval(progressTimer);
@@ -164,13 +277,18 @@ const CacheView: Component = () => {
   });
 
   const grouped = createMemo(() => {
-    const items = result()?.items ?? [];
-    const map = new Map<string, CacheItem[]>();
-    for (const i of items) {
-      if (!map.has(i.category)) map.set(i.category, []);
-      map.get(i.category)!.push(i);
+    const map = new Map<string, Keyed<CacheItem>[]>();
+    for (const item of items()) {
+      if (!map.has(item.category)) map.set(item.category, []);
+      map.get(item.category)!.push(item);
     }
-    return Array.from(map.entries());
+    // 「可清理空间」由**每项的 safety** 现场判定（`isCategoryReclaimable`），
+    // 不维护一份分类名单 —— 名单一漂移就会把斜线纹理标到不该标的地方。
+    return Array.from(map.entries()).map(([category, groupedItems]) => ({
+      category,
+      groupedItems,
+      reclaimable: isCategoryReclaimable(groupedItems),
+    }));
   });
 
   return (
@@ -239,14 +357,21 @@ const CacheView: Component = () => {
                 </div>
               </div>
             </Show>
+            <Show when={error()}>
+              <p class="mt-3 text-xs text-danger-600 dark:text-danger-400" role="alert">
+                {error()}
+              </p>
+            </Show>
           </div>
           <Show
             when={!scanning()}
             fallback={
-              <div class="flex items-center gap-2 text-xs text-zinc-500">
-                <Loader2 size={14} class="animate-spin" />
-                {t("cache.scanning")}
-              </div>
+              <ScanStageProgress
+                current={stageCurrent()}
+                doneCount={stageDone()}
+                total={CACHE_STAGE_TOTAL}
+                foundBytes={stageFound()}
+              />
             }
           >
             <div class="text-right shrink-0">
@@ -254,7 +379,7 @@ const CacheView: Component = () => {
                 class="text-3xl font-bold text-brand-600 tabular-nums transition-all duration-500"
                 classList={{ "scale-[1.06]": cleaning() }}
               >
-                {fmtBytes(result()?.total_bytes ?? 0)}
+                {fmtBytes(snapshot()?.value.total_bytes ?? 0)}
               </div>
               <div class="text-xs text-zinc-500">{t("cache.freeable")}</div>
             </div>
@@ -287,7 +412,7 @@ const CacheView: Component = () => {
       </Show>
 
       <Show
-        when={(result()?.items.length ?? 0) > 0}
+        when={items().length > 0}
         fallback={
           <Show when={!scanning()}>
             <div class="card p-12 text-center text-sm text-zinc-500">
@@ -297,34 +422,46 @@ const CacheView: Component = () => {
         }
       >
         <For each={grouped()}>
-          {([category, items]) => (
+          {(group) => (
             <div class="card p-4 animate-fade-in">
               <div class="flex items-center gap-2 mb-3 px-1">
                 <span
-                  class={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${CATEGORY_COLORS[category] ?? ""}`}
+                  class={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${CATEGORY_COLORS[group.category] ?? ""}`}
+                  classList={{ "reclaimable-hatch": group.reclaimable }}
+                  data-reclaimable={group.reclaimable ? "true" : "false"}
                 >
-                  {CATEGORY_LABELS[category] ?? category}
+                  {categoryLabel(group.category, t)}
                 </span>
                 <span class="text-xs text-zinc-500">
                   {t("cache.groupCount", {
-                    count: items.length,
-                    size: fmtBytes(items.reduce((s, i) => s + i.size_bytes, 0)),
+                    count: group.groupedItems.length,
+                    size: fmtBytes(
+                      group.groupedItems.reduce(
+                        (sum, item) => sum + item.size_bytes,
+                        0,
+                      ),
+                    ),
                   })}
                 </span>
               </div>
               <ul class="space-y-1">
-                <For each={items}>
+                <For each={group.groupedItems}>
                   {(item) => (
                     <li class="flex items-start gap-3 p-2 rounded-lg hover:bg-black/[0.02] dark:hover:bg-white/[0.02]">
                       <input
                         type="checkbox"
-                        checked={selected().has(item.id)}
-                        onChange={() => toggle(item.id)}
+                        checked={selected().has(item.selection_key)}
+                        onChange={() => toggle(item.selection_key)}
                         class="mt-1 w-4 h-4 rounded accent-brand-500"
                       />
                       <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2">
-                          <span class="font-medium text-sm">{item.label}</span>
+                          <span class="font-medium text-sm">
+                            {t(
+                              item.label_key,
+                              paramsToRecord(item.label_params),
+                            )}
+                          </span>
                           {item.safety === "safe" && (
                             <span class="px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-success-500/15 text-success-600">
                               {t("risk.safe")}
@@ -342,13 +479,11 @@ const CacheView: Component = () => {
                           )}
                         </div>
                         <div class="text-xs text-zinc-500 mt-0.5">
-                          {item.description}
+                          {t(
+                            item.description_key,
+                            paramsToRecord(item.description_params),
+                          )}
                         </div>
-                        <Show when={item.command}>
-                          <div class="text-[10px] font-mono text-zinc-400 mt-1 truncate">
-                            $ {item.command}
-                          </div>
-                        </Show>
                         <Show when={item.path}>
                           <div class="text-[10px] font-mono text-zinc-400 mt-0.5 truncate">
                             {item.path}
@@ -384,7 +519,7 @@ const CacheView: Component = () => {
             selected().size === 0 ||
             selectedBytes() === 0
           }
-          onClick={runClean}
+          onClick={() => void requestClean()}
         >
           <Show
             when={!cleaning()}
@@ -418,6 +553,19 @@ const CacheView: Component = () => {
         </span>
       </div>
 
+      <Show when={pending()}>
+        {(prepared) => (
+          <OperationConfirm
+            prepared={prepared()}
+            title={t("opConfirm.title")}
+            confirmLabel={t("opConfirm.confirm")}
+            busy={cleaning()}
+            onConfirm={() => void confirmClean()}
+            onCancel={() => setPending(null)}
+          />
+        )}
+      </Show>
+
       <Show when={summary() && summary()!.fail_count > 0}>
         <div class="card p-4 border-danger-500/20">
           <div class="flex items-center gap-2 mb-2">
@@ -428,8 +576,12 @@ const CacheView: Component = () => {
             <For each={summary()!.reports.filter((r) => !r.success)}>
               {(r) => (
                 <li class="flex gap-2">
-                  <span class="font-medium min-w-[140px]">{r.label}</span>
-                  <span class="text-zinc-500">{r.error}</span>
+                  <span class="font-medium min-w-[140px]">
+                    {t(r.label_key, paramsToRecord(r.label_params))}
+                  </span>
+                  <span class="text-zinc-500">
+                    {r.error ? errorText(r.error, tText) : ""}
+                  </span>
                   <span class="ml-auto text-zinc-400">
                     {fmtDuration(r.duration_ms)}
                   </span>
