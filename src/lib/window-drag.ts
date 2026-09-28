@@ -1,21 +1,63 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+const NON_DRAG_SELECTOR = [
+  "button",
+  "input",
+  "textarea",
+  "select",
+  "a",
+  "label",
+  "summary",
+  ".card",
+  "li",
+  "[data-no-drag]",
+  "[contenteditable]:not([contenteditable='false'])",
+].join(",");
+
+const isContentEditable = (element: Element) => {
+  let current: Element | null = element;
+  while (current) {
+    const contentEditable = (current as HTMLElement).contentEditable;
+    if (contentEditable === "true" || contentEditable === "plaintext-only") {
+      return true;
+    }
+    current = current.parentElement;
+  }
+  return false;
+};
+
 /**
- * 显式调用 Tauri startDragging API 实现窗口拖动。
+ * 元素**自身**（不含后代）是否带文字。
  *
- * 背景：Tauri v2 在 macOS + transparent: true + titleBarStyle: Overlay 配置下，
- * `data-tauri-drag-region` 自动处理和 `-webkit-app-region: drag` CSS 都会失效，
- * 必须用 JS 主动调用 API 才能可靠拖动。
- *
- * 用法：在容器元素上 `onMouseDown={handleWindowDrag}`。
- * 子元素如果是 button/input/a/textarea/select 或带 [data-no-drag] 属性，会自动跳过。
+ * 这是「背景可拖 / 文字可拖选」这条分界线。必须只看自身文本节点：如果看
+ * `textContent`，那么包着整棵内容树的内容容器会因为"后代里有字"而永远判定为
+ * 文字区，于是整个内容区都拖不动 —— 正好是 P0 重构留下的那个毛病。
  */
-export const handleWindowDrag = (e: MouseEvent) => {
-  if (e.button !== 0) return;
-  const target = e.target as HTMLElement;
-  // 排除：交互元素 + 卡片本体 + 列表项 + 任何带 [data-no-drag] 标记
-  // 这样主内容区的「卡片之间的 padding 间隙」可以拖动，卡片内部正常交互
-  if (target.closest("button, input, textarea, select, a, label, .card, li, [data-no-drag]")) return;
-  e.preventDefault();
-  void getCurrentWindow().startDragging();
+const hasOwnText = (element: Element) => {
+  for (const node of Array.from(element.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE && /\S/.test(node.textContent ?? "")) {
+      return true;
+    }
+  }
+  return false;
+};
+
+export const isSafeWindowDragTarget = (target: EventTarget | null) => {
+  if (!(target instanceof Element)) return false;
+  if (target.closest(NON_DRAG_SELECTOR) !== null) return false;
+  if (isContentEditable(target)) return false;
+  // 压在文字上时让位给拖选：拖窗口和拖选文本是同一个手势，同一块区域上不可能
+  // 兼得，所以只在真正的空白背景上接管。滚轮滚动不受影响（那是 wheel 事件，
+  // 不经过 mousedown）。
+  return !hasOwnText(target);
+};
+
+export const handleWindowDrag = (event: MouseEvent) => {
+  if (event.button !== 0 || !isSafeWindowDragTarget(event.target)) return;
+  event.preventDefault();
+  void getCurrentWindow()
+    .startDragging()
+    .catch((error: unknown) => {
+      console.error("拖动窗口失败", error);
+    });
 };
