@@ -178,7 +178,12 @@ async fn run_stages(
             if let Some(sink) = &sink {
                 sink(crate::scan_progress::StageUpdate::running(stage));
             }
-            let batch = f(home);
+            // **先过滤再上报 done**。顺序反了会引入一个很难自查的 bug：
+            // 进度事件带上的是「过滤前」的 found_bytes，而最终列表是过滤后的
+            // 总量，两者对不上（实测差 210 MB）。UI 上表现为「已发现 13.0 GB」
+            // 但列表加起来只有 12.8 GB，用户看着像 bug —— 实际是我们上报了
+            // 一批 MAS 版根本清不了的项。
+            let batch = drop_uncleanable(f(home));
             if let Some(sink) = &sink {
                 sink(crate::scan_progress::StageUpdate::done(stage, &batch));
             }
@@ -192,6 +197,27 @@ async fn run_stages(
         }
     }
     items
+}
+
+/// 丢掉当前构建形态**清不掉**的条目。
+///
+/// MAS 形态下 `pnpm` / `yarn` / `docker` / `go` 都在沙箱里 exec 不出去
+/// （`CacheAction::needs_external_cli`）。这些条目如果照常出现在列表里，
+/// 用户勾上点清理只会拿到一句「权限不足 / 启动失败」，而且是**不可逆操作流程的
+/// 中途**才失败 —— 比一开始就不提供更糟。
+///
+/// 关键取舍：**在扫描阶段就过滤，而不是在点清理时拒绝**。列表是用户对「这个产品
+/// 能做什么」的判断依据；给一个清不了的选项，等于骗人。
+///
+/// 注意不影响 pip：`pip_cleanup` 有 `direct_cleanup` 兜底，删目录即可。
+fn drop_uncleanable(items: Vec<CacheItem>) -> Vec<CacheItem> {
+    if crate::flavor::CURRENT.can_exec_external_tools() {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| item.action.is_cleanable())
+        .collect()
 }
 
 pub async fn scan(progress: Option<crate::scan_progress::ProgressSink>) -> CacheScanResult {
@@ -2117,3 +2143,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "cache_flavor_filter_tests.rs"]
+mod cache_flavor_filter_tests;

@@ -21,6 +21,26 @@ pub enum CacheAction {
     StaleNodeModules,
 }
 
+impl CacheAction {
+    /// 这一类清理**是否必须**调外部 CLI。
+    ///
+    /// App Sandbox 下沙箱进程只能 exec 自己 bundle 里的二进制，所以
+    /// `pnpm` / `yarn` / `docker` / `go` 一个都用不了 —— 它们没有纯 Rust 等价物。
+    ///
+    /// 注意 `Pip` **不算**：`pip_cleanup` 在 CLI 失败时会 fall through 到
+    /// `direct_cleanup`（直接删目录），所以 pip 缓存在沙箱里仍能清。
+    /// `Npm` / `Homebrew` / `Xcode` / `Cocoapods` / `Cargo` / `System` /
+    /// `StaleNodeModules` 同理，本来就是直接删路径。
+    pub fn needs_external_cli(self) -> bool {
+        matches!(self, Self::Pnpm | Self::Yarn | Self::Docker | Self::Go)
+    }
+
+    /// 当前构建形态下这一类能不能被清理。
+    pub fn is_cleanable(self) -> bool {
+        crate::flavor::CURRENT.can_exec_external_tools() || !self.needs_external_cli()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SnapshotKind {
     Cache,
