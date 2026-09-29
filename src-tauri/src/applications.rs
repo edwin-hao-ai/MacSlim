@@ -339,53 +339,50 @@ fn build_children_tree(
 /// 读 .app/Contents/Info.plist，提取 CFBundleName / CFBundleIdentifier
 /// 用最朴素的文本解析（Info.plist 多是 XML 格式；二进制 plist 我们不解析，
 /// 返回 None 由 caller 走路径推断兜底）
+/// 读 Info.plist 里的 `(展示名, bundle id)`。
+///
+/// **原生解析，不 shell 出去。** 早先的实现是：二进制 plist 先 `plutil
+/// -convert xml1` 转成 XML 文本，再用正则按 key 抓 `<string>`。App Sandbox
+/// 下沙箱进程只能 exec 自己 bundle 里的二进制，`plutil` 根本不可用，所以这条
+/// 路径在 MAS 版上必然失效 —— 改用 `plist` crate 原地解析 XML / bplist 都行。
+///
+/// 顺带修掉正则的一个真 bug：正则找的是「`<key>K</key>` 之后的**第一个**
+/// `<string>`」。若该 key 的值是数组/字典（例如 `CFBundleURLTypes`），
+/// 正则会跨过结构直接抓到**嵌套里**的字符串，属性就串了。真正的解析器只看
+/// 该 key 自己的值，类型不对就返回 None。
 pub(crate) fn read_plist_metadata(path: &std::path::Path) -> (Option<String>, Option<String>) {
-    let Ok(bytes) = std::fs::read(path) else {
-        return (None, None);
-    };
-    // 二进制 plist 以 "bplist" 开头，用 plutil 转换为 XML 再解析
-    let text = if bytes.starts_with(b"bplist") {
-        match convert_bplist_to_xml(path) {
-            Some(t) => t,
-            None => return (None, None),
-        }
-    } else {
-        match std::str::from_utf8(&bytes) {
-            Ok(t) => t.to_string(),
-            Err(_) => return (None, None),
-        }
-    };
-    let name = extract_plist_string(&text, "CFBundleDisplayName")
-        .or_else(|| extract_plist_string(&text, "CFBundleName"));
-    let id = extract_plist_string(&text, "CFBundleIdentifier");
+    let map = read_plist_map(path);
+    let name =
+        plist_string(&map, "CFBundleDisplayName").or_else(|| plist_string(&map, "CFBundleName"));
+    let id = plist_string(&map, "CFBundleIdentifier");
     (name, id)
 }
 
-/// 用 plutil 将二进制 plist 转换为 XML 文本
-fn convert_bplist_to_xml(path: &std::path::Path) -> Option<String> {
-    let output = std::process::Command::new("plutil")
-        .args(["-convert", "xml1", "-o", "-"])
-        .arg(path)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8(output.stdout).ok()
+/// 读一个 plist 文件的顶层字典。解析不了就返回空 map（调用方各字段都拿不到，
+/// 自然退化成「未知 app」，而不是 panic）。
+pub(crate) fn read_plist_map(path: &std::path::Path) -> plist::Dictionary {
+    let Ok(bytes) = std::fs::read(path) else {
+        return plist::Dictionary::new();
+    };
+    // 一次读入内存。`Value::from_reader` 自己按魔数认 XML / bplist 两种格式，
+    // 所以不需要（也不该）在这里手写分支再调 plutil。
+    plist::Value::from_reader(std::io::Cursor::new(&bytes))
+        .ok()
+        .and_then(|value| value.into_dictionary())
+        .unwrap_or_default()
 }
 
-pub(crate) fn extract_plist_string(text: &str, key: &str) -> Option<String> {
-    // 找 <key>KEY</key>...<string>VALUE</string>
-    let key_tag = format!("<key>{}</key>", key);
-    let idx = text.find(&key_tag)?;
-    let rest = &text[idx + key_tag.len()..];
-    let start = rest.find("<string>")? + "<string>".len();
-    let end = rest[start..].find("</string>")?;
-    let val = rest[start..start + end].trim();
-    if val.is_empty() {
+/// 取字典里某个 key 的字符串值；**类型不是 string 就返回 None**。
+///
+/// 空白串（含全空格）按 None 处理 —— 显示名落空时调用方会继续往下走分支，
+/// 返回 `"   "` 会让界面出现一个看不见的空白名字。
+pub(crate) fn plist_string(map: &plist::Dictionary, key: &str) -> Option<String> {
+    let value = map.get(key)?.as_string()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
         None
     } else {
-        Some(val.to_string())
+        Some(trimmed.to_string())
     }
 }
 
@@ -610,3 +607,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "plist_native_tests.rs"]
+mod plist_native_tests;

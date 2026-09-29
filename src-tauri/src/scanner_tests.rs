@@ -764,8 +764,8 @@ fn non_descendant_process_names_still_fall_back_to_the_bundle_name() {
 
 /// 空白 bundle 名必须 fallthrough，不能被当成有效显示名返回。
 ///
-/// 这条路径**实际可达**：`extract_plist_string`（`applications.rs:369-382`）只对
-/// `<string></string>` 返回 `None`，`<string>   </string>` 会原样返回空白。
+/// 这条路径**实际可达**：`applications::plist_string` 对空串与全空格串都
+/// 返回 `None`，所以展示名会继续往下走分支。
 #[test]
 fn blank_bundle_display_name_falls_through_to_the_later_branches() {
     // bundle-id 形态：落穿后应命中固定映射，而不是返回空白

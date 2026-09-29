@@ -1,5 +1,5 @@
 // 应用扫描器：枚举已安装应用，计算大小，读取元数据
-use crate::applications::{extract_plist_string, read_plist_metadata};
+use crate::applications::{plist_string, read_plist_map, read_plist_metadata};
 use crate::operations::{InstalledAppIdentity, OperationStore, SnapshotRegistration};
 use crate::user_error::{ErrorCode, UserError};
 use serde::Serialize;
@@ -124,24 +124,14 @@ pub fn read_icon_base64_for_bundle(bundle_path: &Path) -> Option<String> {
     read_icon_base64(bundle_path, &plist_path, &std::env::temp_dir())
 }
 
-/// 从 Info.plist 读取图标文件名
+/// 从 Info.plist 读取图标文件名。
+///
+/// **原生解析。** 原先是「bplist 先 plutil 转 XML，再正则抓 key」——
+/// App Sandbox 下 `plutil` 不可用（沙箱只能 exec 自带二进制），所以这条在
+/// MAS 版上必然失效。改走 `applications::read_plist_map` 一次性拿到字典。
 fn read_icon_name(plist_path: &Path) -> Option<String> {
-    let bytes = std::fs::read(plist_path).ok()?;
-    let text = if bytes.starts_with(b"bplist") {
-        let output = std::process::Command::new("plutil")
-            .args(["-convert", "xml1", "-o", "-"])
-            .arg(plist_path)
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        String::from_utf8(output.stdout).ok()?
-    } else {
-        std::str::from_utf8(&bytes).ok()?.to_string()
-    };
-    extract_plist_string(&text, "CFBundleIconFile")
-        .or_else(|| extract_plist_string(&text, "CFBundleIconName"))
+    let map = read_plist_map(plist_path);
+    plist_string(&map, "CFBundleIconFile").or_else(|| plist_string(&map, "CFBundleIconName"))
 }
 
 /// 用 sips 将 .icns 转为 64x64 PNG 并返回 base64 编码

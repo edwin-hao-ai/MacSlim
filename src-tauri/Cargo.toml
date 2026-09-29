@@ -44,6 +44,10 @@ tauri-plugin-autostart = "2.2"
 tauri-plugin-updater = "2.2"
 tauri-plugin-process = "2.2"
 serde = { version = "1", features = ["derive"] }
+# 原生解析 Info.plist，替代 shell 出去的 `plutil -convert xml1`。
+# App Sandbox 下沙箱进程只能 exec 自己 bundle 里的二进制，`plutil` 不可用，
+# 所以这一条是 MAS 构建能否跑起来的前提，不是可选优化。
+plist = "1.7"
 serde_json = "1"
 getrandom = "0.2"
 sysinfo = "0.33"
