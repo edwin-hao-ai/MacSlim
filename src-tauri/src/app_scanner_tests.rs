@@ -264,7 +264,19 @@ fn parallel_scan_matches_a_serial_reference_row_for_row() {
     assert_rows_equal(&parallel_runs[1], &parallel_runs[0], "第 2 轮 vs 第 1 轮");
     assert_rows_equal(&parallel_runs[2], &parallel_runs[0], "第 3 轮 vs 第 1 轮");
 
-    // 图标分支确实被走到，而不是两边都是 None 的空断言
+    // 图标分支确实被走到，而不是两边都是 None 的空断言。
+    //
+    // MAS 形态下**按设计**就没有图标（`icns_to_base64_png` 在 mas feature 下
+    // 直接返回 None，理由见那里的注释），所以这里反过来断言「全为 None」——
+    // 既保住了这条断言的意义，又不会让 mas 形态的 CI 无理由地红。
+    #[cfg(feature = "mas")]
+    {
+        assert!(
+            expected.iter().all(|a| a.icon_base64.is_none()),
+            "MAS 形态不产出图标（沙箱里 sips 不可用），不应有 app 带 icon"
+        );
+    }
+    #[cfg(not(feature = "mas"))]
     assert!(
         expected.iter().any(|a| a.icon_base64.is_some()),
         "fixture 必须至少有一个 app 带真实图标，否则图标断言是空转"
@@ -508,6 +520,13 @@ fn invalidating_the_app_scan_cache_forces_a_rescan() {
 /// 若临时文件名不带唯一后缀，并行的 sips 会写坏彼此的输出。
 #[test]
 fn parallel_icon_decoding_survives_apps_sharing_one_icon_file_name() {
+    // 这条测的是「多个 app 共用同一个图标文件名时，并行的 sips 不会互相覆盖」。
+    // MAS 形态根本没有 sips（`icns_to_base64_png` 直接返回 None），这条测的
+    // 对象不存在，跳过而不是让它必然失败。
+    if cfg!(feature = "mas") {
+        eprintln!("跳过：MAS 形态不调用 sips，无并行解码可测");
+        return;
+    }
     let _guard = cache_guard();
     let fixture = ScanFixture::new("icon_collision");
     for name in ["One", "Two", "Three", "Four", "Five", "Six"] {

@@ -134,7 +134,25 @@ fn read_icon_name(plist_path: &Path) -> Option<String> {
     plist_string(&map, "CFBundleIconFile").or_else(|| plist_string(&map, "CFBundleIconName"))
 }
 
-/// 用 sips 将 .icns 转为 64x64 PNG 并返回 base64 编码
+/// 把 .icns 转成 64x64 PNG 并返回 base64。
+///
+/// **MAS 形态下整体跳过**（返回 None → 列表用通用图标兜底）。
+///
+/// 这里没有走「原生 icns 解码」那条路，理由是权衡后的取舍：
+///
+/// 1. `sips` 在沙箱里不可用（只能 exec 自带二进制），所以 MAS 版确实不能
+///    用现实现。
+/// 2. 纯 Rust 的替代是 `icns` crate，但它要手工处理 element 格式
+///    （`IconFamily::read` + 逐 element 判断 `ostype` / 嵌 PNG），
+///    且拖进 `bitflags v0.7` 这个已被标记 future-incompat 的传递依赖。
+/// 3. 而图标是**纯装饰**：AppIcon.png 缺失时应用列表展示通用图标，
+///    清理能力、扫描结果、进程保护判定一概不受影响。
+///
+/// 为一个装饰项引入一个 API 笨重 + 依赖陈旧的 crate，收益不抵成本。
+/// 与 docker 的处理同思路：沙箱做不到的事**优雅降级**，而不是硬凑。
+/// 真要图标，后续可接 AppIcon 的 `sips` 替代品（先例：Spacedrive 等）或
+/// 预编译一个小解码器，但那属于独立的、有实测依据的决策。
+#[cfg(not(feature = "mas"))]
 fn icns_to_base64_png(icns_path: &Path, dir: &Path) -> Option<String> {
     use base64::Engine;
     // 临时文件名必须每次调用唯一：并行扫描时不同 app 会撞名。本机 15 个 app 的
@@ -142,6 +160,7 @@ fn icns_to_base64_png(icns_path: &Path, dir: &Path) -> Option<String> {
     // 会互相覆盖对方正在写/正在读的文件，导致图标随机损坏或整体丢失。
     static ICON_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = ICON_SEQ.fetch_add(1, Ordering::Relaxed);
+
     let tmp = dir.join(format!(
         "macslim_icon_{}_{}_{}.png",
         std::process::id(),
@@ -161,7 +180,12 @@ fn icns_to_base64_png(icns_path: &Path, dir: &Path) -> Option<String> {
     }
     let png_bytes = std::fs::read(&tmp).ok();
     let _ = std::fs::remove_file(&tmp);
-    Some(base64::engine::general_purpose::STANDARD.encode(&png_bytes?))
+    Some(base64::engine::general_purpose::STANDARD.encode(png_bytes?))
+}
+
+#[cfg(feature = "mas")]
+fn icns_to_base64_png(_icns_path: &Path, _dir: &Path) -> Option<String> {
+    None
 }
 
 /// 计算目录总大小（字节）
