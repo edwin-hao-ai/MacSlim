@@ -44,7 +44,15 @@ PROFILE="${MAS_PROFILE:-$HOME/.config/mddock/MacSlim_MAS.mobileprovision}"
 PRIV="${PRIVACY_MANIFEST:-src-tauri/PrivacyInfo.xcprivacy}"
 TARGET="aarch64-apple-darwin"
 
-APP="src-tauri/target/${TARGET}/release/bundle/macos/MacSlim.app"
+# MAS 构建**必须**用独立的 target 目录。
+#
+# 踩过：两个构建共用 `src-tauri/target` 时，MAS 构建会把完整版的 release 产物
+# 整个顶掉 —— 实测 Developer ID 签名的 .app 被 MAS 的 3rd Party 版覆盖，
+# 连已构建好的 dmg 都没了。完整版是主产品，不能被 MAS 的调试反复破坏。
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo/shared-target-mas}"
+mkdir -p "$CARGO_TARGET_DIR"
+
+APP="${CARGO_TARGET_DIR}/${TARGET}/release/bundle/macos/MacSlim.app"
 ZIP_DIST="dist/mas"
 ZIP_PATH="${ZIP_DIST}/MacSlim-1.0.0-mas.zip"
 
@@ -77,6 +85,27 @@ build() {
 
   [ -d "$APP" ] || fail "构建没产出 $APP"
   echo "  产物: $APP ($(du -sh "$APP" | cut -f1))"
+}
+
+strip_cli() {
+  # 从 MAS bundle 里删掉嵌套的 macslim-cli。
+  #
+  # 实测（2026-09-29）：**带沙箱的 macslim-cli 一起签名后启动即 SIGTRAP**，
+  # 崩溃栈全在 dyld 初始化阶段：
+  #   _libsecinit_appsandbox → _os_activity_initicate_impl → libSystemInitializer
+  #   → dyld::MachOAnalyzer::forEachInitializer
+  # 连 `--version`（只做 println!）都打不出来，所以与业务代码无关，是
+  # 沙箱 profile 在进程启动极早期校验失败后主动 trap。
+  #
+  # 留着一个必定崩溃的可执行文件有两个坏处：审核阶段可能因此直接拒；
+  # 而且它对 App Store 用户**毫无价值** —— 沙箱里 exec 不了外部工具，
+  # 而 CLI 的存在意义正是驱动它们。桌面端是自带 CLI 的（不走沙箱）。
+  info "剔除嵌套 CLI"
+  local cli="$APP/Contents/MacOS/macslim-cli"
+  if [ -f "$cli" ]; then
+    rm -f "$cli"
+    echo "  已删除 $cli（沙箱下启动即 SIGTRAP，且对 App Store 用户无价值）"
+  fi
 }
 
 sanitize_info_plist() {
@@ -194,8 +223,8 @@ upload() {
 }
 
 case "$MODE" in
-  build)  preflight; build; sanitize_info_plist; install_privacy_manifest; sign; verify; archive ;;
+  build)  preflight; build; strip_cli; sanitize_info_plist; install_privacy_manifest; sign; verify; archive ;;
   upload) upload ;;
-  all)    preflight; build; sanitize_info_plist; install_privacy_manifest; sign; verify; archive; upload ;;
+  all)    preflight; build; strip_cli; sanitize_info_plist; install_privacy_manifest; sign; verify; archive; upload ;;
   *)     fail "用法: $0 [build|upload|all]" ;;
 esac

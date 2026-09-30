@@ -2,16 +2,21 @@
   "$schema": "./gen/schemas/desktop-schema.json",
   "app": {
     "security": {
-      "capabilities": ["mas"]
+      "capabilities": [
+        "mas"
+      ]
     }
   },
   "bundle": {
-    "targets": ["app"],
+    "targets": [
+      "app"
+    ],
     "resources": [
       "PrivacyInfo.xcprivacy"
     ],
     "macOS": {
       "entitlements": "entitlements.mas.plist"
-    }
+    },
+    "createUpdaterArtifacts": false
   }
 }

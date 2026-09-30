@@ -88,9 +88,13 @@ class MasConfigTests(unittest.TestCase):
 
     def test_selects_exactly_one_capability(self) -> None:
         # Tauri 会**合并**多份 capability。两份同时生效 = updater 权限还在 =
-        # 分叉没做。所以必须显式只列 mas.json。
+        # 分叉没做。所以必须显式只列一份。
+        #
+        # 引用的是 capability 的 **identifier**，不是文件路径。写成
+        # "src-tauri/capabilities/mas.json" 会报
+        # `capability with identifier ... not found`（实测踩过）。
         capabilities = self.config["app"]["security"]["capabilities"]
-        self.assertEqual(capabilities, ["mas.json"])
+        self.assertEqual(capabilities, ["mas"])
 
     def test_points_at_the_mas_entitlements_not_the_shared_one(self) -> None:
         # 用错文件的话，MAS 包会拿 Developer ID 的 entitlements（无沙箱）去签，
@@ -104,8 +108,12 @@ class MasConfigTests(unittest.TestCase):
             self.base["bundle"]["macOS"]["entitlements"],
         )
 
-    def test_keeps_the_mas_bundle_target(self) -> None:
-        self.assertIn("mas", self.config["bundle"]["targets"])
+    def test_does_not_claim_a_mas_bundle_target(self) -> None:
+        # Tauri v2 **移除了** Mac App Store 支持：BundleType 只有
+        # deb/rpm/appimage/msi/nsis/app/dmg，没有 `mas`。写上去会在 schema
+        # 校验阶段直接失败（`["app","mas"] is not valid under any of the
+        # schemas`）。MAS 产物由 scripts/release-mas.sh 手工串步骤产出。
+        self.assertEqual(self.config["bundle"]["targets"], ["app"])
         self.assertNotIn("mas", self.base["bundle"]["targets"])
 
     def test_ships_the_privacy_manifest(self) -> None:
@@ -183,6 +191,47 @@ class PrivacyManifestTests(unittest.TestCase):
             declared["NSPrivacyAccessedAPICategoryFileTimestamp"], ["C617.1"]
         )
         self.assertEqual(declared["NSPrivacyAccessedAPICategoryDiskSpace"], ["E174.1"])
+
+
+class MasTargetIsolationTests(unittest.TestCase):
+    """MAS 构建**必须**与完整版物理隔离。
+
+    踩过的坑：两个构建共用 `src-tauri/target` 时，MAS 构建把完整版的 release
+    产物整个顶掉了 —— Developer ID 签名的 .app 变成 3rd Party 签名，连已构建
+    好的 dmg 都没了。完整版是主产品，不能被 MAS 的反复调试破坏。
+    """
+
+    def setUp(self) -> None:
+        self.script = (ROOT / "scripts/release-mas.sh").read_text(encoding="utf-8")
+        self.gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    def test_pins_its_own_cargo_target_dir(self) -> None:
+        self.assertIn("CARGO_TARGET_DIR", self.script)
+        self.assertIn("shared-target-mas", self.script)
+
+    def test_does_not_derive_the_app_path_from_the_shared_target(self) -> None:
+        # 路径里若出现裸的 src-tauri/target，说明还是共用 —— 那正是坑的成因
+        self.assertNotIn('APP="src-tauri/target/', self.script)
+
+    def test_mas_target_dir_is_git_ignored(self) -> None:
+        self.assertIn("target-mas", self.gitignore)
+
+    def test_strips_the_cli_that_crashes_under_sandbox(self) -> None:
+        # 实测：带沙箱的 macslim-cli 一起签名后启动即 SIGTRAP，崩溃栈全在
+        # dyld 初始化阶段（_libsecinit_appsandbox → forEachInitializer），
+        # 连 `--version` 都打不出来。留着只会被审核拒，且对 App Store 用户无价值。
+        self.assertIn("strip_cli", self.script)
+        self.assertIn("macslim-cli", self.script)
+        # 且必须在签名**之前**执行 —— 删文件改了 bundle，签名要在删完之后做
+        strip_at = self.script.find("strip_cli;")
+        sign_at = self.script.find("sanitize_info_plist;")
+        self.assertLess(strip_at, sign_at)
+
+    def test_excluded_bundle_target_is_not_mas(self) -> None:
+        # Tauri v2 的 BundleType 里没有 `mas`（只有 deb/rpm/appimage/msi/
+        # nsis/app/dmg），写上去会在 schema 校验阶段直接失败
+        self.config = load_json("tauri.mas.conf.json")
+        self.assertEqual(self.config["bundle"]["targets"], ["app"])
 
 
 class CargoFeatureTests(unittest.TestCase):
