@@ -155,13 +155,24 @@ def request(method: str, path: str, env: dict, body: dict | None = None) -> dict
     }
     # 网络调用必须有重试：Apple 的 API 会偶发 SSL EOF / 502，不重试就会把
     # 「网络抖了一下」表现成「凭据无效」这种完全错误的结论。
+    #
+    # 按方法**分别派发**，不要写成 `if GET else POST` —— 那会把 PATCH
+    # 悄悄发成 POST，于是对「{resource}/{id}」这种只接受 PATCH 的路径
+    # 返回 405 METHOD_NOT_ALLOWED，看起来像「这个资源不支持 PATCH」，
+    # 实际是方法发错了。踩过：据此得出「只能删了重建」的错误结论，
+    # 而 DELETE 主语言本地化其实也是禁止的（409）。
+    senders = {
+        "GET": lambda: requests.get(url, headers=headers, timeout=60),
+        "POST": lambda: requests.post(url, headers=headers, json=body, timeout=60),
+        "PATCH": lambda: requests.patch(url, headers=headers, json=body, timeout=60),
+        "DELETE": lambda: requests.delete(url, headers=headers, timeout=60),
+    }
+    if method not in senders:
+        fail(f"不支持的 HTTP 方法：{method}")
     last_error: Exception | None = None
     for attempt in range(4):
         try:
-            if method == "GET":
-                response = requests.get(url, headers=headers, timeout=60)
-            else:
-                response = requests.post(url, headers=headers, json=body, timeout=60)
+            response = senders[method]()
             break
         except requests.RequestException as error:
             last_error = error
