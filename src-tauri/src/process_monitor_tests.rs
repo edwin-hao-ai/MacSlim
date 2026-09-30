@@ -51,17 +51,47 @@ fn full_name_is_always_the_raw_process_name_never_the_display_name() {
 
 #[test]
 fn a_bundle_backed_process_gets_a_human_readable_name() {
-    // 反过来也要成立：用户看到的不该是一堆 `/Applications/....app` 路径。
-    // 展示名从 bundle 路径派生，`full_name` 保持原始名，两者分工明确。
-    let rows = super::list_readonly_rows();
-    let with_bundle = rows
-        .iter()
-        .find(|r| r.exe.contains(".app/Contents/"))
-        .expect("本机总有带 bundle 路径的进程");
-    assert_ne!(
-        with_bundle.name, with_bundle.full_name,
-        "带 bundle 的进程应当有可读名，而不只是原始名"
-    );
+    // 用户看到的不该是一堆 `/Applications/....app` 路径。展示名从 bundle 路径
+    // 派生、`full_name` 保持原始名，两者分工明确。
+    //
+    // 直接测纯函数而不是去 live 列表里找一条 —— 那会让断言依赖「此刻这台
+    // 机器跑着什么」。踩过：`Keychain Circle Notification` 的 exe 在
+    // `.app/Contents/` 里，但它的 bundle 名与进程名相同，于是「两者不等」
+    // 这条断言随机地红。
+    let (name, key) =
+        super::display_name("Google Chrome Helper", Some("Google Chrome".to_string()));
+    assert_eq!(name, "Google Chrome");
+    assert_eq!(key, None, "bundle 名已经是中文可读名，不需要 i18n 替换");
+}
+
+#[test]
+fn without_a_bundle_name_it_falls_back_to_the_raw_process_name() {
+    // 拿不到 bundle（沙箱里大多数进程）时退回原始名，而不是显示路径或空串。
+    let (name, key) = super::display_name("some-agent", None);
+    assert_eq!(name, "some-agent");
+    assert_eq!(key, None);
+}
+
+#[test]
+fn an_empty_bundle_name_is_treated_as_no_bundle() {
+    // bundle 名算出来是空串时不能返回空展示名 —— 那会让列表出现空行。
+    let (name, key) = super::display_name("some-agent", Some(String::new()));
+    assert_eq!(name, "some-agent");
+    assert_eq!(key, None);
+}
+
+#[test]
+fn the_three_webkit_processes_have_fixed_display_names() {
+    // 这三个是固定映射：前端也会兜一层，但后端给对值能让首屏少一次闪烁。
+    for (raw, expected) in [
+        ("com.apple.WebKit.WebContent", "process.webkit.webContent"),
+        ("com.apple.WebKit.Networking", "process.webkit.networking"),
+        ("com.apple.WebKit.GPU", "process.webkit.gpu"),
+    ] {
+        let (name, key) = super::display_name(raw, None);
+        assert_eq!(name, expected, "{raw} 的展示名不对");
+        assert_eq!(key, Some(expected.to_string()));
+    }
 }
 
 #[test]
