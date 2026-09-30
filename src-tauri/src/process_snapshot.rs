@@ -49,6 +49,11 @@ pub struct ProcessSample {
     /// `Option`；拿不到时统一用 `None`，不用空串 —— 空串和「未知」在 UI
     /// 上会被渲染成两样东西，约定统一掉，下游就不用猜。
     pub exe_path: Option<String>,
+    /// 进程启动时间（Unix epoch 秒）。
+    ///
+    /// `None` 表示拿不到。**绝不能用 0 代替** —— 0 会被当成「1970 年启动」，
+    /// 于是运行时长算成 56 年，或者反过来把每个进程都判成「刚启动」。
+    pub start_time_epoch_secs: Option<u64>,
 }
 
 /// 用 `sysctl(KERN_PROC_ALL)` 枚举 PID。`None` = 系统调用被拒。
@@ -126,6 +131,7 @@ pub fn sample_process(pid: i32) -> Option<ProcessSample> {
         cpu_nanos: task.pti_total_user.saturating_add(task.pti_total_system),
         thread_count: task.pti_threadnum,
         exe_path: exe_path(pid),
+        start_time_epoch_secs: (bsd.pbi_start_tvsec > 0).then_some(bsd.pbi_start_tvsec),
     })
 }
 

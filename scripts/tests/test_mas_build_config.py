@@ -32,6 +32,27 @@ def load_json(name: str) -> dict:
     return json.loads((TAURI / name).read_text(encoding="utf-8"))
 
 
+def strip_rust_comments(source: str) -> str:
+    """去掉 Rust 的行注释与文档注释，只留代码。
+
+    「只读路径不许出现 sysinfo」这类门禁必须查**代码**而不是散文 ——
+    而这些模块的文档注释里恰恰要写清「为什么不用 sysinfo、它被沙箱拦」，
+    把注释一起判掉会让正确的说明反过来把门禁弄挂。
+    """
+    out: list[str] = []
+    for line in source.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("//"):
+            continue
+        # 行尾注释：不在字符串里的第一个 //。这里用「// 前不得出现奇数个引号」
+        # 判断，够用且不会为了严谨去写一个 Rust 词法分析器。
+        quoted = line.count('"') % 2 == 1
+        if not quoted and "//" in line:
+            line = line[: line.index("//")]
+        out.append(line)
+    return "\n".join(out)
+
+
 class DeveloperIdEntitlementsTests(unittest.TestCase):
     """Developer ID 公证版：必须**没有**沙箱。"""
 
@@ -322,3 +343,69 @@ class CargoFeatureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MasProcessMonitoringTests(unittest.TestCase):
+    """MAS 版必须有只读进程列表，而且必须走 sysctl 那条路。
+
+    实测（2026-09-30，MAS 包真机）：`sysinfo` 在沙箱里数出 **0** 个进程，
+    因为它枚举进程走 libproc 的 `proc_listallpids`，那个调用被 App Sandbox
+    拦掉了。交接文档里「进程管理 0 项」「应用程序 0」都是这么来的 ——
+    **不是权限问题，是依赖交白卷**。
+
+    换成 `sysctl(KERN_PROC_ALL)` + `proc_pidinfo` 后沙箱内能拿到 200+ 个
+    进程，且 `proc_pidpath` 还能给出完整 bundle 路径。
+    """
+
+    def setUp(self) -> None:
+        self.lib = strip_rust_comments((TAURI / "src/lib.rs").read_text(encoding="utf-8"))
+        self.monitor = strip_rust_comments(
+            (TAURI / "src/process_monitor.rs").read_text(encoding="utf-8")
+        )
+        self.snapshot = strip_rust_comments(
+            (TAURI / "src/process_snapshot.rs").read_text(encoding="utf-8")
+        )
+
+    def test_the_process_command_branches_on_flavor(self) -> None:
+        # 分支必须挂在 flavor 模块上（唯一真相源），不能散落 cfg。
+        body = self.lib.split("async fn list_all_processes", 1)[1]
+        body = body.split("\n}", 1)[0]
+        self.assertIn("flavor::CURRENT", body, "list_all_processes 没有按形态分叉")
+        self.assertIn("Flavor::Mas", body, "MAS 分支缺失")
+        self.assertIn("Flavor::DeveloperId", body, "Developer ID 分支缺失")
+
+    def test_the_readonly_list_never_reaches_for_sysinfo(self) -> None:
+        # 一旦有人在只读路径里用上 sysinfo，沙箱里就又变回 0 项，而且不会有
+        # 任何报错 —— 只会安静地给用户一张空列表。
+        for forbidden in ("sysinfo", "System::new", "refresh_processes"):
+            self.assertNotIn(
+                forbidden,
+                self.monitor,
+                f"只读进程列表里出现了 {forbidden} —— 沙箱内会被拦成 0 项",
+            )
+
+    def test_the_snapshot_reads_pids_through_sysctl_not_libproc(self) -> None:
+        # 这条是整件事的技术前提。libproc 的 proc_listallpids 被沙箱拦，
+        # sysctl(KERN_PROC_ALL) 不被拦。
+        self.assertIn("KERN_PROC_ALL", self.snapshot)
+        self.assertNotIn("proc_listallpids", self.snapshot)
+        self.assertIn("PROC_PIDTASKALLINFO", self.snapshot)
+
+    def test_the_readonly_list_never_claims_it_can_protect_or_terminate(self) -> None:
+        # 只读视图里没有终止入口，**没有东西需要保护**。把 protected 设成
+        # true 会让整张列表被 opacity-70 变灰，看起来像 App 坏了。
+        self.assertIn("protected: false", self.monitor)
+        self.assertIn("ports: Vec::new()", self.monitor)
+        self.assertIn("icon_base64: None", self.monitor)
+
+    def test_the_readonly_list_keeps_the_raw_process_name_for_identity_checks(self) -> None:
+        # `revalidate_targets` 会在终止前把 `ProcessIdentity.name` 与现场读到的
+        # 原始名逐字比较。full_name 一旦塞了展示名，一键清理会全部报
+        # 「进程身份已变化」。
+        self.assertIn("full_name: sample.name.clone()", self.monitor)
+
+    def test_the_two_flavors_produce_the_same_row_shape(self) -> None:
+        # 前端零改动的前提：MAS 行必须就是 `scanner::ProcessRow`。
+        # 字段少一个编译不过，多一个也会编译不过 —— 这正是我们要的。
+        self.assertIn("use crate::scanner::ProcessRow;", self.monitor)
+        self.assertIn("-> Vec<ProcessRow>", self.monitor)

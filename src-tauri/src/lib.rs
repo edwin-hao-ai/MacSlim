@@ -14,6 +14,7 @@ pub(crate) mod operation_commands;
 pub(crate) mod operation_executor;
 pub mod operations;
 pub mod ports;
+pub mod process_monitor;
 pub(crate) mod process_ops;
 pub mod process_safety;
 pub mod process_snapshot;
@@ -111,12 +112,26 @@ async fn scan_all(
 
 /// 列出所有可见用户进程（不做分类过滤，用于进程管理页）。
 /// 与 scan_all 不同：返回全部，前端自己做展示/搜索/排序。
+///
+/// MAS 形态改走 `process_monitor` 的只读列表。原因是 `sysinfo` 枚举进程靠
+/// libproc 的 `proc_listallpids`，**那个调用被 App Sandbox 拦掉** ——
+/// 实测 MAS 包里数出 0 个，于是这一页在 App Store 版是空的。
+/// 换成 `sysctl` + `proc_pidinfo` 之后沙箱内能拿到 200+ 个进程，
+/// 而**行形状完全一致**，所以前端与 `ProcessView` 一行都不用改。
+///
+/// 判定放在 flavor 模块而不是散落 `cfg`：那里是「两个构建形态分离」的唯一
+/// 真相源（见 flavor.rs 的模块注释）。
 #[tauri::command]
 async fn list_all_processes(
     state: State<'_, AppState>,
 ) -> Result<SnapshotResult<Vec<scanner::ProcessRow>>, UserError> {
-    let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
-    let rows = scanner::list_all(&mut sys);
+    let rows = match flavor::CURRENT {
+        flavor::Flavor::DeveloperId => {
+            let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
+            scanner::list_all(&mut sys)
+        }
+        flavor::Flavor::Mas => process_monitor::list_readonly_rows(),
+    };
     let policy = whitelist_policy(&state);
     let mut operations = state.operations.lock().map_err(|error| error.to_string())?;
     operation_commands::snapshot_process_rows(&mut operations, rows, &policy)

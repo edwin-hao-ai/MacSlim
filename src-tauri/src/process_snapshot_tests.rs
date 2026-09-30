@@ -133,6 +133,7 @@ fn cpu_percent_is_derived_from_the_delta_not_the_absolute() {
         cpu_nanos: 1_000_000_000,
         thread_count: 1,
         exe_path: None,
+        start_time_epoch_secs: None,
     }];
     let later = vec![ProcessSample {
         pid: 1,
@@ -144,6 +145,7 @@ fn cpu_percent_is_derived_from_the_delta_not_the_absolute() {
         cpu_nanos: 2_000_000_000,
         thread_count: 1,
         exe_path: None,
+        start_time_epoch_secs: None,
     }];
     let percents = cpu_percent(&base, &later, 2.0);
     assert!((percents.get(&1).copied().unwrap_or(-1.0) - 50.0).abs() < 0.01);
@@ -160,6 +162,7 @@ fn cpu_percent_is_zero_when_nothing_moved() {
         cpu_nanos: 500,
         thread_count: 1,
         exe_path: None,
+        start_time_epoch_secs: None,
     }];
     assert_eq!(cpu_percent(&same, &same, 1.0).get(&7).copied(), Some(0.0));
 }
@@ -177,6 +180,7 @@ fn cpu_percent_ignores_processes_that_were_not_there_before() {
         cpu_nanos: 999_999_999_999,
         thread_count: 1,
         exe_path: None,
+        start_time_epoch_secs: None,
     }];
     assert_eq!(
         cpu_percent(&before, &after, 1.0).get(&99).copied(),
@@ -197,6 +201,7 @@ fn cpu_percent_never_exceeds_a_hundred() {
         cpu_nanos: 0,
         thread_count: 8,
         exe_path: None,
+        start_time_epoch_secs: None,
     }];
     let after = vec![ProcessSample {
         pid: 5,
@@ -207,6 +212,7 @@ fn cpu_percent_never_exceeds_a_hundred() {
         cpu_nanos: 10_000_000_000,
         thread_count: 8,
         exe_path: None,
+        start_time_epoch_secs: None,
     }];
     let value = cpu_percent(&before, &after, 1.0);
     assert!(value[&5] <= 100.0, "单次采样间隔 1 秒却算出 {}%", value[&5]);
@@ -280,4 +286,44 @@ fn exe_path_is_none_rather_than_empty_string_when_unavailable() {
             sample.pid
         );
     }
+}
+
+// ===== 启动时间 =====
+//
+// 「运行时长」与「年轻进程」判定都要它。拿不到时必须是 None 而不是 0 ——
+// 0 会被当成「1970 年启动」，进而算出 56 年运行时长，或者反过来把
+// 每个进程都判成「刚启动」。
+
+#[test]
+fn our_own_start_time_is_a_plausible_epoch_second() {
+    let me = std::process::id() as i32;
+    let sample = super::sample_process(me).expect("应当能采到自己");
+    let start = sample
+        .start_time_epoch_secs
+        .expect("自己的启动时间必须拿得到");
+    // Unix epoch 之后的合理区间：2001 年到「现在 + 1 小时」之间
+    assert!(
+        start > 1_000_000_000 && start < now_epoch_secs() + 3600,
+        "启动时间 {start} 不在合理区间"
+    );
+}
+
+#[test]
+fn uptime_is_measured_from_the_start_time() {
+    let me = std::process::id() as i32;
+    let sample = super::sample_process(me).expect("应当能采到自己");
+    let start = sample.start_time_epoch_secs.expect("有启动时间");
+    let uptime = now_epoch_secs().saturating_sub(start);
+    assert!(
+        uptime < 86_400,
+        "测试进程的运行时长 {uptime} 秒（{:.1} 小时）不合理",
+        uptime as f64 / 3600.0
+    );
+}
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
