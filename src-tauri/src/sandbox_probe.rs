@@ -650,10 +650,13 @@ fn bookmark_roundtrip() -> Result<PathBuf, String> {
     // 二分诊断：同一份书签**不带** security-scope 选项再解析一次。
     // 能解析 → 创建时的掩码写错了，产出的根本不是 scoped 书签；
     // 不能解析 → 问题在沙箱层面（entitlement 未生效 / 缺用户授权）。
+    // 注意这里是**排除**而不是**判定**：不带 scope 也能解析，只能说明
+    // 「创建时的掩码没写错」（否则带 scope 的那份本来就解析不了）。
+    // 它不能推出「所以掩码是对的」—— 缺 startAccessing 的授权也会这样。
     let plain = if ffi::resolve_plain(&bookmark).is_some() {
-        "同一书签不带 scope 反而能解析 → 创建掩码写错，产出的不是 security-scoped 书签"
+        "已排除「创建掩码写错」这一原因"
     } else {
-        "同一书签不带 scope 也解析不了 → 问题在沙箱层面，不是掩码"
+        "连不带 scope 的同一书签都解析不了 → 问题比掩码更靠前（书签损坏或 entitlement 未生效）"
     };
     let scope = ffi::resolve_detailed(&bookmark).map_err(|error| {
         let reason = match error {
