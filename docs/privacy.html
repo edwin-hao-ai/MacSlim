@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MacSlim 隐私政策 · Privacy Policy</title>
+    <meta
+      name="description"
+      content="MacSlim 的隐私政策：所有扫描与清理全部在本机完成，不采集、不上传任何数据。"
+    />
+    <style>
+      :root {
+        --fg: #18181b;
+        --muted: #52525b;
+        --line: #e4e4e7;
+        --bg: #ffffff;
+        --card: #fafafa;
+        --accent: #0f766e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e4e4e7;
+          --muted: #a1a1aa;
+          --line: #27272a;
+          --bg: #09090b;
+          --card: #18181b;
+          --accent: #5eead4;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 48px 24px 96px;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.75 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          "Helvetica Neue",
+          "PingFang SC",
+          sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 30px;
+        line-height: 1.3;
+        margin: 0 0 6px;
+        letter-spacing: -0.02em;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 0 0 32px;
+      }
+      h2 {
+        font-size: 18px;
+        margin: 36px 0 10px;
+        letter-spacing: -0.01em;
+      }
+      p,
+      li {
+        color: var(--fg);
+      }
+      ul {
+        padding-left: 20px;
+      }
+      li {
+        margin: 6px 0;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px 20px;
+        margin: 20px 0;
+      }
+      .lead {
+        font-size: 17px;
+        font-weight: 600;
+        color: var(--accent);
+        margin: 0 0 6px;
+      }
+      code {
+        font:
+          13px/1.6 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 1px 5px;
+      }
+      footer {
+        margin-top: 48px;
+        padding-top: 20px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>MacSlim 隐私政策</h1>
+      <p class="sub">最后更新：2026-10-01 · 版本 1.0</p>
+
+      <div class="card">
+        <p class="lead">一句话：MacSlim 不采集任何数据，也不把任何东西传出你的 Mac。</p>
+        <p style="margin: 0">
+          没有账号、没有统计、没有崩溃上报、没有广告 SDK、没有第三方分析。
+          扫描与清理全部在本机完成。应用的网络权限只用于「检查更新」——
+          而 Mac App Store 版由 App
+          Store 负责更新，该功能在本版本中不存在。
+        </p>
+      </div>
+
+      <h2>我们不做什么</h2>
+      <ul>
+        <li>不收集你的文件内容、文件名或路径（除了为了显示而临时计算体积）</li>
+        <li>不收集设备标识符，包括 IDFA / IDFV</li>
+        <li>不上传崩溃日志、日志文件或诊断信息</li>
+        <li>不要求注册，不要求邮箱</li>
+      </ul>
+
+      <h2>数据保存在哪里</h2>
+      <p>
+        清理历史与白名单保存在应用自己的沙箱容器内，仅本机可见。删除应用即一并删除。
+      </p>
+
+      <h2>Mac App Store 版的文件夹授权</h2>
+      <p>
+        App Store 版运行在系统沙箱内，出于平台限制**无法**直接读取你的用户目录。
+        所以它只读取你**亲手授权**的目录，具体通过 macOS 标准的文件选择框完成。
+      </p>
+      <ul>
+        <li>授权记录是一份 security-scoped bookmark，存在应用自己的容器里</li>
+        <li>授权只在应用运行期间生效，退出即失效</li>
+        <li>你可以随时在应用内撤销任何一条授权，撤销后立刻停止读取</li>
+        <li>我们不保存、也不上传被授权目录里的任何内容</li>
+      </ul>
+      <p>
+        需要说明的一点：macOS 规定沙箱应用即使获得「完全磁盘访问权限」，
+        仍受沙箱自身限制。所以这个版本**不要求**你授予完全磁盘访问权限，
+        也不需要修改任何系统隐私设置。
+      </p>
+
+      <h2>第三方服务</h2>
+      <p>无。本应用不集成任何第三方 SDK。</p>
+
+      <h2>儿童隐私</h2>
+      <p>
+        本应用不面向儿童，也不会有意收集儿童的任何个人信息。
+      </p>
+
+      <h2>你的控制权</h2>
+      <ul>
+        <li>撤销文件夹授权：应用内「缓存清理」页，每条授权旁边都有「撤销」</li>
+        <li>清空清理历史与白名单：应用内「设置」页</li>
+        <li>删除全部本地数据：直接删除应用</li>
+      </ul>
+
+      <h2>变更</h2>
+      <p>
+        本政策如有变更，会随应用更新一并发布，并更新页面顶部的日期。
+      </p>
+
+      <footer>
+        联系邮箱：<a href="mailto:120298858@qq.com">120298858@qq.com</a> ·
+        源码：<a href="https://github.com/edwin-hao-ai/MacSlim">github.com/edwin-hao-ai/MacSlim</a>
+      </footer>
+    </main>
+  </body>
+</html>

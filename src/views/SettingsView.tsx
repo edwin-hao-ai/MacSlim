@@ -6,6 +6,7 @@ import {
   type WhitelistEntry,
 } from "@/lib/tauri";
 import { checkForUpdate, downloadAndInstall, type UpdateStatus } from "@/lib/updater";
+import { can } from "@/lib/flavor";
 import { fmtBytes, fmtRelativeTime } from "@/lib/format";
 import FdaCard from "@/components/FdaCard";
 import { Plus, Trash2, Check, Download, RefreshCw } from "lucide-solid";
@@ -224,7 +225,14 @@ const SettingsView: Component = () => {
         </div>
       </div>
 
-      {/* 更新检查 */}
+      {/*
+        更新检查按能力门禁：MAS 由 App Store 负责更新，
+        `tauri_plugin_updater` 在 MAS 构建里整块没注册
+        （`lib.rs` 的 `#[cfg(not(feature = "mas"))]`），
+        capability/mas.json 里的两条 updater 权限也一并去掉了。
+        留着这个按钮，点了必然报错 —— 那是审核一眼能看出来的坏入口。
+      */}
+      <Show when={can("inAppUpdate")}>
       <div class="card p-3">
         <div class="flex items-start justify-between gap-4 px-2 pt-1">
           <div class="flex-1">
@@ -309,6 +317,7 @@ const SettingsView: Component = () => {
           </div>
         </div>
       </div>
+      </Show>
 
       <div class="card p-4">
         <div class="flex items-center justify-between mb-3 px-1">

@@ -10,6 +10,7 @@ import HealthCard from "@/components/HealthCard";
 import ProcessList from "@/components/ProcessList";
 import Welcome from "@/components/Welcome";
 import CleanupFlash from "@/components/CleanupFlash";
+import { can } from "@/lib/flavor";
 import OperationConfirm, {
   ProtectedForceConfirm,
   type ProtectedRow,
@@ -208,34 +209,57 @@ const ScanView: Component = () => {
         <CleanupFlash visible={showFlash()} onDone={() => setShowFlash(false)} />
         <HealthCard health={snapshot()?.value.health ?? null} />
 
-        <ProcessList
-          processes={processes()}
-          selected={selected()}
-          onToggle={toggle}
-          onWhitelist={async (name) => {
-            await addWhitelist("process", name, "scan list add");
-            setMessage(t("scan.whitelistAdded", { name }));
-            await runScan();
-          }}
-        />
+        {/*
+          「可优化进程 + 一键优化」整块按能力门禁。
+
+          MAS 版里 `scan_all` 枚举不到进程（sysinfo 走 proc_listallpids，
+          被沙箱拦），于是这张表是空的，空表会显示
+          「没有发现可优化的进程，系统运行良好」—— 那台机器上有 186 个进程，
+          这句话是假的。留着它既是骗用户，也是审核眼里的「误导」。
+          终止不了进程时，这一块没有任何诚实可展示的内容。
+        */}
+        <Show when={can("terminateProcess")}>
+          <ProcessList
+            processes={processes()}
+            selected={selected()}
+            onToggle={toggle}
+            onWhitelist={async (name) => {
+              await addWhitelist("process", name, "scan list add");
+              setMessage(t("scan.whitelistAdded", { name }));
+              await runScan();
+            }}
+          />
+
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              class="btn-primary gap-2 min-w-[180px]"
+              disabled={optimizing() || scanning() || selected().size === 0}
+              onClick={optimize}
+            >
+              <Show
+                when={!optimizing()}
+                fallback={<Loader2 size={16} class="animate-spin" />}
+              >
+                <Sparkles size={16} />
+              </Show>
+              {t("scan.oneClick")}
+              {selected().size > 0 ? ` (${selected().size})` : ""}
+            </button>
+
+            <Show when={message()}>
+              <span class="text-xs text-zinc-500 animate-fade-in">
+                {message()}
+              </span>
+            </Show>
+
+            <span class="ml-auto text-[11px] text-zinc-400">
+              {t("common.notice_irreversible")}
+            </span>
+          </div>
+        </Show>
 
         <div class="flex items-center gap-3">
-          <button
-            type="button"
-            class="btn-primary gap-2 min-w-[180px]"
-            disabled={optimizing() || scanning() || selected().size === 0}
-            onClick={optimize}
-          >
-            <Show
-              when={!optimizing()}
-              fallback={<Loader2 size={16} class="animate-spin" />}
-            >
-              <Sparkles size={16} />
-            </Show>
-            {t("scan.oneClick")}
-            {selected().size > 0 ? ` (${selected().size})` : ""}
-          </button>
-
           <button
             type="button"
             class="btn-ghost gap-2"
@@ -251,13 +275,11 @@ const ScanView: Component = () => {
             {t("common.rescan")}
           </button>
 
-          <Show when={message()}>
-            <span class="text-xs text-zinc-500 animate-fade-in">{message()}</span>
+          <Show when={!can("terminateProcess") && message()}>
+            <span class="text-xs text-zinc-500 animate-fade-in">
+              {message()}
+            </span>
           </Show>
-
-          <span class="ml-auto text-[11px] text-zinc-400">
-            {t("common.notice_irreversible")}
-          </span>
         </div>
 
         <Show when={confirmForce()}>

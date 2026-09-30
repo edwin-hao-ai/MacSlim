@@ -91,6 +91,107 @@ struct FdaStatus {
     flavor: &'static str,
 }
 
+// ========== 文件夹访问授权（MAS 版） ==========
+
+/// 一个可供授权的目录。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderTargetView {
+    key: String,
+    /// 相对真实 home 的路径，仅供展示「你要授权哪个目录」
+    relative_path: String,
+    reason_key: String,
+    granted: bool,
+    granted_path: Option<String>,
+}
+
+/// 当前授权状态。
+#[tauri::command]
+fn list_folder_access() -> Vec<FolderTargetView> {
+    let granted = folder_access::load_grants();
+    folder_access::offerable_targets()
+        .into_iter()
+        .map(|target| {
+            let existing = granted
+                .iter()
+                .find(|g| g.target_key == target.key)
+                .map(|g| g.path.display().to_string());
+            FolderTargetView {
+                key: target.key.to_string(),
+                relative_path: target.relative.to_string(),
+                reason_key: target.reason_key.to_string(),
+                granted: existing.is_some(),
+                granted_path: existing,
+            }
+        })
+        .collect()
+}
+
+/// 让用户授权一个目录。
+///
+/// 走系统文件选择框 —— 沙箱里没有任何 entitlement 能让我们直接读用户目录，
+/// 唯一合规的入口就是用户在标准对话框里亲手选定它。
+///
+/// `NSOpenPanel.runModal` 必须在主线程，所以这里只做参数准备，真正弹窗
+/// 通过 `run_on_main_thread` 调度，结果与错误经 channel 回传。
+#[tauri::command]
+async fn grant_folder_access(
+    app: tauri::AppHandle,
+    target_key: String,
+    prompt: String,
+) -> Result<bool, UserError> {
+    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    app.run_on_main_thread(move || {
+        // SAFETY: pick_folder 会阻塞到用户做出选择，因此必须放到主线程 ——
+        // NSOpenPanel 的 runModal 在别的线程调用会直接崩。
+        let picked = unsafe { folder_access::ffi::pick_folder(&prompt) };
+        let _ = tx.send(picked);
+    })
+    .map_err(|error| {
+        UserError::new(
+            ErrorCode::FOLDER_ACCESS_PANEL_FAILED,
+            format!("无法调度文件选择框：{error}"),
+        )
+    })?;
+
+    let picked = rx.recv().map_err(|error| {
+        UserError::new(
+            ErrorCode::FOLDER_ACCESS_PANEL_FAILED,
+            format!("文件选择框异常：{error}"),
+        )
+    })?;
+    let Some(path) = picked else {
+        return Ok(false); // 用户取消，不是错误
+    };
+
+    let Some(bookmark) = folder_access::ffi::create_bookmark(&path) else {
+        return Err(UserError::new(
+            ErrorCode::FOLDER_ACCESS_BOOKMARK_FAILED,
+            "无法为所选目录创建访问凭证",
+        ));
+    };
+    let display_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| target_key.clone());
+    folder_access::record_grant(folder_access::Grant {
+        target_key,
+        display_name,
+        path,
+        bookmark,
+    })
+    .map_err(|error| UserError::new(ErrorCode::FOLDER_ACCESS_STORE_FAILED, error))?;
+    Ok(true)
+}
+
+/// 撤销一条授权。
+#[tauri::command]
+fn revoke_folder_access(target_key: String) -> Result<(), UserError> {
+    folder_access::revoke_grant(&target_key)
+        .map_err(|error| UserError::new(ErrorCode::FOLDER_ACCESS_STORE_FAILED, error))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_fda_status() -> FdaStatus {
     let real_home = fda::real_home_for_probe();
@@ -465,6 +566,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_build_flavor,
             get_fda_status,
+            list_folder_access,
+            grant_folder_access,
+            revoke_folder_access,
             get_system_health,
             scan_all,
             list_all_processes,

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MacSlim 支持 · Support</title>
+    <style>
+      :root {
+        --fg: #18181b;
+        --muted: #52525b;
+        --line: #e4e4e7;
+        --bg: #ffffff;
+        --card: #fafafa;
+        --accent: #0f766e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e4e4e7;
+          --muted: #a1a1aa;
+          --line: #27272a;
+          --bg: #09090b;
+          --card: #18181b;
+          --accent: #5eead4;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 48px 24px 96px;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.75 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          "Helvetica Neue",
+          "PingFang SC",
+          sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 30px;
+        margin: 0 0 6px;
+        letter-spacing: -0.02em;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 0 0 32px;
+      }
+      h2 {
+        font-size: 18px;
+        margin: 36px 0 10px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px 20px;
+        margin: 16px 0;
+      }
+      ul {
+        padding-left: 20px;
+      }
+      li {
+        margin: 6px 0;
+      }
+      a {
+        color: var(--accent);
+      }
+      footer {
+        margin-top: 48px;
+        padding-top: 20px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>MacSlim 支持</h1>
+      <p class="sub">需要帮忙？先看下面这三条，九成问题都在这里。</p>
+
+      <div class="card">
+        <strong>缓存清理扫不出东西？</strong>
+        <p style="margin: 6px 0 0">
+          App Store 版受系统沙箱限制，只读取你亲手授权的目录。
+          打开「缓存清理」页，点对应目录的「授权」，在系统弹出的文件选择框里
+          选中它，然后再点「重新扫描」。
+        </p>
+      </div>
+
+      <div class="card">
+        <strong>找不到「结束进程」按钮？</strong>
+        <p style="margin: 6px 0 0">
+          沙箱不允许应用给其他进程发信号，App Store 版因此只提供<strong
+            >只读</strong
+          >
+          的进程监控：可以看到每个进程的 CPU 与内存，但不能代替你终止它。
+          需要这项能力请用官网的完整版。
+        </p>
+      </div>
+
+      <div class="card">
+        <strong>清理会不会误删？</strong>
+        <p style="margin: 6px 0 0">
+          「重新获取成本低于 5 分钟」的项目才会默认选中，例如应用缓存、日志、
+          Xcode 编译缓存。完整镜像、整份 node_modules 这类大件<strong>不会</strong
+          >默认选中。每一项在执行前都会二次校验路径。
+        </p>
+      </div>
+
+      <h2>两个版本的区别</h2>
+      <ul>
+        <li>
+          <strong>Mac App Store 版（本应用）</strong>：系统监控、进程监控、
+          应用体积与卸载、文件夹授权后的缓存清理。更新由 App Store 负责。
+        </li>
+        <li>
+          <strong>完整版（官网下载）</strong>：在上述基础上增加终止进程、
+          Docker 清理、端口占用，以及不需要逐个授权文件夹的缓存清理。
+        </li>
+      </ul>
+
+      <h2>反馈</h2>
+      <p>
+        遇到问题或想要某项能力，直接写信：
+        <a href="mailto:120298858@qq.com">120298858@qq.com</a>。
+        附上「设置」页里的版本号会更快定位。
+      </p>
+      <p>
+        源码与完整版下载：
+        <a href="https://github.com/edwin-hao-ai/MacSlim">github.com/edwin-hao-ai/MacSlim</a>
+      </p>
+
+      <footer>隐私政策：<a href="./privacy.html">MacSlim 隐私政策</a></footer>
+    </main>
+  </body>
+</html>

@@ -266,16 +266,19 @@ class SecurityConfigTests(unittest.TestCase):
         self.assertEqual(len(capabilities["permissions"]), 14)
         self.assertEqual(MODULE.validate_capabilities(capabilities), [])
 
-    def test_operation_broker_ipc_surface_is_exactly_eighteen_trusted_commands(self):
-        # 17 = 原 16 + `get_build_flavor`（纯元数据：下发 developer_id / mas，
-        # 让前端在 App Store 版里藏掉沙箱里做不到的「终止进程」入口）。
+    def test_operation_broker_ipc_surface_is_exactly_twentyone_trusted_commands(self):
+        # 21 = 16 基线 + get_build_flavor（纯元数据：下发 developer_id / mas）
+        #     + get_fda_status + 三条文件夹授权（App Store 版读用户目录的
+        #       唯一合规入口：用户在标准文件选择框里亲手授权）。
         # 破坏性面仍必须精确等于 prepare + execute 两条 —— 下面单独断言。
+        # 文件夹授权命令**不进**破坏性面：它们只往 bookmark 里记一条授权，
+        # 不碰任何进程与文件内容。真正的删除仍然只走 prepare + execute。
         contract = MODULE.operation_contract
         root = SCRIPT_PATH.parents[1]
         lib = (root / "src-tauri/src/lib.rs").read_text(encoding="utf-8")
         commands = contract.rust_invoke_handler_commands(lib)
         self.assertEqual(commands, list(contract.EXPECTED_IPC_COMMANDS))
-        self.assertEqual(len(commands), 18)
+        self.assertEqual(len(commands), 21)
         self.assertEqual(sorted(contract.rust_declared_commands(lib)), sorted(commands))
         self.assertEqual(
             [name for name in commands if name in contract.DESTRUCTIVE_IPC_COMMANDS],

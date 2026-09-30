@@ -34,6 +34,8 @@
 pub mod ffi;
 
 use serde::{Deserialize, Serialize};
+
+use crate::flavor;
 use std::path::{Path, PathBuf};
 
 /// 一个可供用户授权的目录。
@@ -169,6 +171,92 @@ pub fn bookmark_is_plausible(bookmark: &str) -> bool {
         && bookmark
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+}
+
+/// 授权落盘的位置：应用自己的 container 里（沙箱内可写）。
+#[must_use]
+pub fn grants_file() -> Option<PathBuf> {
+    dirs::data_dir().map(|dir| dir.join("folder-grants.json"))
+}
+
+/// 读已授权的目录。文件不存在 = 一个都没授权。
+///
+/// 读取时就丢掉明显损坏的书签，而不是等到扫描时才炸 —— 那时候的表现是
+/// 「某个目录莫名其妙扫不出来」，没有任何线索。
+#[must_use]
+pub fn load_grants() -> Vec<Grant> {
+    let Some(path) = grants_file() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<Vec<Grant>>(&text) else {
+        return Vec::new();
+    };
+    parsed
+        .into_iter()
+        .filter(|grant| bookmark_is_plausible(&grant.bookmark))
+        .collect()
+}
+
+/// 存授权。
+pub fn save_grants(grants: &[Grant]) -> Result<(), String> {
+    let path = grants_file().ok_or("拿不到应用数据目录")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+    }
+    let json =
+        serde_json::to_string_pretty(grants).map_err(|error| format!("序列化失败：{error}"))?;
+    std::fs::write(&path, json).map_err(|error| format!("写入失败：{error}"))
+}
+
+/// 记一条授权（同 target 覆盖）。
+pub fn record_grant(grant: Grant) -> Result<Vec<Grant>, String> {
+    let mut grants = load_grants();
+    grants.retain(|existing| existing.target_key != grant.target_key);
+    grants.push(grant);
+    save_grants(&grants)?;
+    Ok(grants)
+}
+
+/// 撤销一条授权。
+pub fn revoke_grant(target_key: &str) -> Result<Vec<Grant>, String> {
+    let mut grants = load_grants();
+    grants.retain(|existing| existing.target_key != target_key);
+    save_grants(&grants)?;
+    Ok(grants)
+}
+
+/// 进入所有已授权目录的作用域，**返回值必须活到扫描结束**。
+///
+/// 这是让授权真正生效的那一步：`startAccessingSecurityScopedResource` 与
+/// `stopAccessing...` 必须严格配对，所以不能在这里进入又立刻退出 ——
+/// 返回的 guard 由调用方持有到扫描完成。
+///
+/// 返回空 Vec 表示一个目录都没授权，此时扫描结果必然是 0，UI 必须据此
+/// 告诉用户去授权，而不是显示「没有发现可清理的缓存」。
+#[must_use]
+pub fn enter_granted_scopes() -> Vec<ffi::SecurityScope> {
+    load_grants()
+        .iter()
+        .filter_map(|grant| ffi::resolve_and_access(&grant.bookmark))
+        .collect()
+}
+
+/// 扫描时该传给各 stage 的「home」。
+///
+/// 完整版就是 `$HOME`；MAS 版必须用 passwd 里的**真实 home** ——
+/// `$HOME` 在沙箱里指向应用自己的空 container，于是所有 `~/Library/...`
+/// 都解析到那里，扫出 0 B。
+#[must_use]
+pub fn scanner_home() -> PathBuf {
+    match flavor::CURRENT {
+        flavor::Flavor::DeveloperId => dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+        flavor::Flavor::Mas => crate::sandbox_probe::real_home()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/")),
+    }
 }
 
 #[cfg(test)]

@@ -11,6 +11,12 @@ import {
 } from "lucide-solid";
 import { useI18n } from "@/i18n";
 import SafeDragSurface from "@/components/shell/SafeDragSurface";
+import {
+  capabilitiesOf,
+  getFlavor,
+  type Capability,
+  type Flavor,
+} from "@/lib/flavor";
 
 export type ViewId =
   | "scan"
@@ -26,15 +32,40 @@ type Props = {
   onChange: (id: ViewId) => void;
 };
 
-const items: { id: ViewId; icon: Component<{ size?: number }> }[] = [
+type NavItem = {
+  id: ViewId;
+  icon: Component<{ size?: number }>;
+  /** 该页面依赖的能力。缺了就渲染。**硬要求**，不是锦上添花。 */
+  needs?: Capability;
+};
+
+const allItems: NavItem[] = [
   { id: "scan", icon: Activity },
-  { id: "process", icon: Cpu },
-  { id: "applications", icon: Package },
-  { id: "cache", icon: HardDrive },
-  { id: "uninstaller", icon: Trash2 },
+  { id: "process", icon: Cpu, needs: "processMonitor" },
+  { id: "applications", icon: Package, needs: "appGrouping" },
+  { id: "cache", icon: HardDrive, needs: "cacheClean" },
+  { id: "uninstaller", icon: Trash2, needs: "appSizeAnalysis" },
   { id: "history", icon: HistoryIcon },
   { id: "settings", icon: SettingsIcon },
 ];
+
+/**
+ * 当前形态下应该出现的导航项。
+ *
+ * 没有对应能力的页面，导航过去就是**空页面** —— 那是 App Store 指南 2.1
+ * 说的不完整形态，也是审核最容易挑的点。宁可少一个入口，也不要让用户
+ * 点进一个什么都没有的地方。
+ *
+ * 能力清单的唯一真相源在 `@/lib/flavor`，这里只做映射。
+ */
+export const visibleNavItems = (
+  flavor: Flavor = getFlavor(),
+): { id: ViewId; icon: Component<{ size?: number }> }[] => {
+  const supported = capabilitiesOf(flavor);
+  return allItems.filter(
+    (item) => item.needs === undefined || supported.includes(item.needs),
+  );
+};
 
 const Sidebar: Component<Props> = (props) => {
   // 版本号从 Tauri 运行时读取，避免与 package.json 脱节
@@ -59,7 +90,7 @@ const Sidebar: Component<Props> = (props) => {
           </div>
         </div>
         <nav class="px-2 py-2 flex flex-col gap-0.5">
-          <For each={items}>
+          <For each={visibleNavItems()}>
             {(item) => (
               <button
                 type="button"

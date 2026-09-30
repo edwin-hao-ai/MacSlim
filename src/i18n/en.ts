@@ -243,6 +243,11 @@ export const en: Dict = {
     app_selected_twice: "The same app was selected twice",
     app_selection_count_mismatch:
       "The app selection key count does not match the snapshot",
+    folder_access_panel_failed:
+      "Could not open the folder picker. Check macOS automation permissions in System Settings, or use the full edition.",
+    folder_access_bookmark_failed:
+      "Could not create an access credential for the selected folder. It may have been moved or deleted.",
+    folder_access_store_failed: "Could not save the folder authorization. Please try again.",
     authorization_cancelled: "The authorization was cancelled",
     blocking_channel_plan_mismatch:
       "The blocking channel only accepts process and app-termination plans",
@@ -409,6 +414,8 @@ export const en: Dict = {
     successItems: "{count} succeeded",
     failItems: "{count} failed",
     groupCount: "{count} items · {size}",
+    noAccess:
+      "No folder has been authorized yet, so no cache is visible. Authorize a folder and scan again.",
     noItems: "No caches to clean. Your Mac is spotless.",
     partialFail: "Some items failed to clean",
     notifyTitle: "MacSlim cleanup complete",
@@ -551,6 +558,24 @@ export const en: Dict = {
     minutesAgo: "{min} min ago",
     hoursAgo: "{h} h ago",
     daysAgo: "{day} d ago",
+  },
+
+  access: {
+    title: "Authorize folders to clean",
+    subtitle:
+      "The App Store edition runs inside the system sandbox and can only read folders you authorize yourself. One-time authorization stays valid, and you can revoke it at any time.",
+    grant: "Authorize",
+    granting: "Pick a folder in the dialog...",
+    revoke: "Revoke",
+    grantedHint: "Authorized folders take effect on the next scan.",
+    target: {
+      userCaches: "App caches",
+      userLogs: "App logs",
+      xcode: "Xcode build cache",
+      npm: "npm cache",
+      cargo: "Rust toolchain cache",
+      trash: "Trash",
+    },
   },
 
   settings: {

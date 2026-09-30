@@ -344,3 +344,55 @@ pub fn resolve_and_access(bookmark_base64: &str) -> Option<SecurityScope> {
         })
     }
 }
+
+// ============================================================================
+// NSOpenPanel —— 让用户亲手授权一个目录
+// ============================================================================
+//
+// ## 为什么必须是系统文件选择框
+//
+// 沙箱里没有任何 entitlement 能让我们直接读用户目录（Apple 文档：即使拿到
+// FDA 沙箱仍强制执行自己的文件限制）。唯一合规的入口是让用户在标准文件
+// 选择框里**亲手选定**一个目录 —— 这与「绕过沙箱」有本质区别，也是
+// App Store 认可的方式（先例：PureSpace）。
+//
+// ## 调用位置
+//
+// `NSOpenPanel` 的 `runModal` 必须在**主线程**、且应用已激活时调用。
+// Tauri 的命令默认跑在 async runtime 上，所以这里由 `pick_folder` 只负责
+// 组参数，真正弹窗由调用方通过 `run_on_main_thread` 调度。
+
+/// 让用户在文件选择框里选一个目录。
+///
+/// 返回用户选中的路径；用户取消返回 `None`。**必须在主线程调用。**
+///
+/// # Safety
+///
+/// `runModal` 会阻塞到用户做出选择。Tauri 的 `run_on_main_thread` 正是为此
+/// 提供的 —— 在别的线程调用会直接崩。
+pub unsafe fn pick_folder(prompt: &str) -> Option<std::path::PathBuf> {
+    let panel: Option<Retained<AnyObject>> = msg_send![class!(NSOpenPanel), openPanel];
+    let panel = panel?;
+
+    // 只选目录、单选。选了文件的话用户会以为授权了整个上级目录，
+    // 而我们实际只拿到那一个文件 —— 期望与现实不一致。
+    let _: () = msg_send![&*panel, setCanChooseDirectories: true];
+    let _: () = msg_send![&*panel, setCanChooseFiles: false];
+    let _: () = msg_send![&*panel, setAllowsMultipleSelection: false];
+    // 允许直接定位到隐藏目录（~/.npm、~/.cargo 都是点号开头的，
+    // 不放开的话用户在选择框里根本看不见）
+    let _: () = msg_send![&*panel, setShowsHiddenFiles: true];
+
+    let title = nsstring_from_str(prompt);
+    let _: () = msg_send![&*panel, setMessage: &*title];
+
+    // NSModalResponseOK == 1
+    let response: isize = msg_send![&*panel, runModal];
+    if response != 1 {
+        return None;
+    }
+
+    let url: Option<Retained<AnyObject>> = msg_send![&*panel, URL];
+    let url = url?;
+    Some(std::path::PathBuf::from(url_path(&url)))
+}

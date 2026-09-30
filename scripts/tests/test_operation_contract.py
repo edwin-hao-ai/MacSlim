@@ -50,15 +50,19 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertEqual(MODULE.validate_operation_contract_files(ROOT), [])
 
     def test_repository_pins_the_registered_ipc_commands(self):
-        # 17 条（原 16 + `get_build_flavor`）。新增那条是纯元数据读取：下发
-        # 当前构建形态，让前端能在 MAS 版里藏掉「终止进程」这个沙箱里做不到的
-        # 入口。**它是刻意的偏离**，不是顺手加的 ——
-        # 替代方案（Vite define 复制一份 flavor）会让 Rust 和前端出现两个真相源，
-        # 那正是 src-tauri/src/flavor.rs 的注释里明确警告的漂移。
+        # 21 条。两条纯元数据读取（`get_build_flavor` 下发当前构建形态，
+        # 让前端能在 MAS 版里藏掉沙箱里做不到的入口；`get_fda_status` 让前端
+        # 区分「缺权限」与「沙箱把 $HOME 换掉了」），三条文件夹授权
+        # （`list_folder_access` / `grant_folder_access` / `revoke_folder_access`
+        # —— App Store 版读用户目录的唯一合规入口）。
+        #
+        # 前两条都是**刻意的偏离**，不是顺手加的：替代方案（Vite define 复制一份
+        # flavor）会让 Rust 和前端出现两个真相源，那正是
+        # src-tauri/src/flavor.rs 的注释里明确警告的漂移。
         # 要加/删命令时，先想清楚它属于 DESTRUCTIVE_IPC_COMMANDS 吗。
         commands = MODULE.rust_invoke_handler_commands(REPOSITORY_FILES["lib.rs"])
         self.assertEqual(commands, list(MODULE.EXPECTED_IPC_COMMANDS))
-        self.assertEqual(len(MODULE.EXPECTED_IPC_COMMANDS), 18)
+        self.assertEqual(len(MODULE.EXPECTED_IPC_COMMANDS), 21)
         self.assertEqual(
             [c for c in MODULE.EXPECTED_IPC_COMMANDS
              if c in MODULE.DESTRUCTIVE_IPC_COMMANDS],
@@ -212,7 +216,7 @@ class IpcCommandSurfaceTests(unittest.TestCase):
     def test_rejects_a_handler_without_any_command(self):
         source = self.base().replace("            check_app_running,", "            /* removed */")
         errors = MODULE.validate_ipc_command_surface(source)
-        self.assertTrue(mark_anything(errors, "generate_handler", "18 个可信 command"), errors)
+        self.assertTrue(mark_anything(errors, "generate_handler", "21 个可信 command"), errors)
         self.assertTrue(mark_anything(errors, "check_app_running"), errors)
 
 

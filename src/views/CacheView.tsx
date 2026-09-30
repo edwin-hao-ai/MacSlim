@@ -40,6 +40,8 @@ import {
   playCleanSuccessSound,
 } from "@/lib/cleanFeedback";
 import CleanupFlash from "@/components/CleanupFlash";
+import FolderAccessCard from "@/components/FolderAccessCard";
+import { can } from "@/lib/flavor";
 import OperationConfirm from "@/components/OperationConfirm";
 import ScanStageProgress from "@/components/ScanStageProgress";
 import { CheckCircle2, Loader2, RefreshCw, Sparkles, XCircle } from "lucide-solid";
@@ -143,7 +145,16 @@ const CacheView: Component = () => {
     setStageFound((n) => n + u.found_bytes);
   };
 
-  const runScan = async () => {
+  /**
+ * App Store 版有没有授权过目录。
+ *
+ * 只在这两个条件下关心：
+ * - 沙箱形态（完整版不受限，谈授权是废话）
+ * - 缓存清理能力在（否则这页本来就不该出现）
+ */
+const needsFolderGrant = () => can("folderGrant");
+
+const runScan = async () => {
     setScanning(true);
     setSummary(null);
     setStageCurrent(null);
@@ -303,6 +314,15 @@ const CacheView: Component = () => {
 
   return (
     <div class="flex flex-col gap-5 p-6 h-full overflow-y-auto">
+      {/*
+        App Store 版把授权卡片放在这里，而不是设置页：
+        授权的目的是为了清理，放到设置页等于让用户自己推理「这个开关和
+        上面那个 0 B 有什么关系」。放在产生需求的地方，因果链是连着的。
+      */}
+      <Show when={can("folderGrant")}>
+        <FolderAccessCard onChanged={() => void runScan()} />
+      </Show>
+
       <CleanupFlash visible={showFlash()} onDone={() => setShowFlash(false)} />
       <div
         class="card p-6 animate-fade-in relative"
@@ -426,7 +446,15 @@ const CacheView: Component = () => {
         fallback={
           <Show when={!scanning()}>
             <div class="card p-12 text-center text-sm text-zinc-500">
-              {t("cache.noItems")}
+              {/* 0 B 在沙箱下的真实含义是「看不到」，不是「很干净」。
+                  说成「你的 Mac 很干净」是把权限问题说成用户的好处 ——
+                  用户会以为刚清过，而审核看到的是误导。 */}
+              <Show
+                when={needsFolderGrant()}
+                fallback={t("cache.noItems")}
+              >
+                {t("cache.noAccess")}
+              </Show>
             </div>
           </Show>
         }

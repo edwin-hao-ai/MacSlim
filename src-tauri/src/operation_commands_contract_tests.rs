@@ -27,6 +27,9 @@ fn invoke_handler_only_exposes_trusted_commands() {
             // 纯元数据：探测完全磁盘访问权限。分「用户缓存」与「系统目录」
             // 两类，因为它们挡住的**能力**不同（缓存清理 vs 进程枚举）。
             "get_fda_status",
+            "list_folder_access",
+            "grant_folder_access",
+            "revoke_folder_access",
             "get_system_health",
             "scan_all",
             "list_all_processes",

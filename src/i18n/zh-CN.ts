@@ -237,6 +237,9 @@ export const zhCN = {
     app_no_terminable_process: "应用 {app} 没有可终止的进程，请重新扫描",
     app_selected_twice: "同一应用被重复选择",
     app_selection_count_mismatch: "应用选择 key 数量与快照不一致",
+    folder_access_panel_failed: "无法打开目录选择框，请在系统设置里检查 macOS 的自动化权限，或改用完整版。",
+    folder_access_bookmark_failed: "无法为所选目录创建访问凭证，可能该目录已被移动或删除。",
+    folder_access_store_failed: "保存授权失败，请重试。",
     authorization_cancelled: "用户取消了授权",
     blocking_channel_plan_mismatch: "阻塞执行通道只接受进程与应用终止计划",
     cache_ancestor_check_failed: "无法检查路径：{reason}",
@@ -372,6 +375,9 @@ export const zhCN = {
     failItems: "失败 {count} 项",
     groupCount: "{count} 项 · {size}",
     noItems: "没有发现可清理的缓存。你的 Mac 很干净！",
+    // App Store 版专用：0 B 在沙箱下的真实含义是「看不到」，不是「很干净」。
+    // 说「你的 Mac 很干净」是把权限问题说成用户的好处，属于审核眼里的误导。
+    noAccess: "还没授权任何目录，所以看不到可清理的缓存。授权后重新扫描即可。",
     partialFail: "部分项目清理失败",
     notifyTitle: "MacSlim 清理完成",
     notifyBody: "已释放 {size}，共清理 {count} 项",
@@ -497,6 +503,24 @@ export const zhCN = {
     minutesAgo: "{min} 分钟前",
     hoursAgo: "{h} 小时前",
     daysAgo: "{day} 天前",
+  },
+
+  access: {
+    title: "授权要清理的目录",
+    subtitle:
+      "App Store 版运行在系统沙箱里，只能读取你亲手授权的目录。授权一次即长期有效，可随时撤销。",
+    grant: "授权",
+    granting: "请在弹出的窗口中选择...",
+    revoke: "撤销",
+    grantedHint: "已授权的目录会在下次扫描时生效。",
+    target: {
+      userCaches: "应用缓存",
+      userLogs: "应用日志",
+      xcode: "Xcode 编译缓存",
+      npm: "npm 缓存",
+      cargo: "Rust 工具链缓存",
+      trash: "废纸篓",
+    },
   },
 
   settings: {

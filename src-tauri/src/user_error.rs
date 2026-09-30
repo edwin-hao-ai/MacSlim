@@ -133,6 +133,10 @@ impl ErrorCode {
     pub const PRE_DELETE_RECHECK_FAILED: Self = Self("pre_delete_recheck_failed");
     pub const DELETE_FAILED: Self = Self("delete_failed");
     pub const AUTHORIZATION_CANCELLED: Self = Self("authorization_cancelled");
+    // ===== 文件夹访问授权（App Store 版读用户目录的唯一合规入口） =====
+    pub const FOLDER_ACCESS_PANEL_FAILED: Self = Self("folder_access_panel_failed");
+    pub const FOLDER_ACCESS_BOOKMARK_FAILED: Self = Self("folder_access_bookmark_failed");
+    pub const FOLDER_ACCESS_STORE_FAILED: Self = Self("folder_access_store_failed");
     pub const ADMIN_PRIVILEGES_REQUIRED: Self = Self("admin_privileges_required");
     pub const REFUSE_SYMLINK_ANCESTOR: Self = Self("refuse_symlink_ancestor");
     pub const REFUSE_SYMLINK: Self = Self("refuse_symlink");
@@ -189,6 +193,9 @@ impl ErrorCode {
         Self::APP_SELECTED_TWICE,
         Self::APP_SELECTION_COUNT_MISMATCH,
         Self::AUTHORIZATION_CANCELLED,
+        Self::FOLDER_ACCESS_PANEL_FAILED,
+        Self::FOLDER_ACCESS_BOOKMARK_FAILED,
+        Self::FOLDER_ACCESS_STORE_FAILED,
         Self::BLOCKING_CHANNEL_PLAN_MISMATCH,
         Self::CACHE_ANCESTOR_CHECK_FAILED,
         Self::CACHE_BUSY_APP_SKIPPED,

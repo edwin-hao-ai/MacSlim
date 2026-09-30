@@ -260,6 +260,11 @@ fn each_file_constructs_exactly_its_declared_codes() {
             // 构造（默认形态那段被 cfg 掉了），但清单是形态无关的静态断言，
             // 所以照样要列在这里。
             &[
+                // 文件夹访问授权（App Store 版读用户目录的唯一合规入口）。
+                // 三条都对应 grant_folder_access / revoke_folder_access 的失败分支。
+                "folder_access_bookmark_failed",
+                "folder_access_panel_failed",
+                "folder_access_store_failed",
                 "process_execution_failed",
                 "process_termination_unsupported",
                 "residue_scan_failed",

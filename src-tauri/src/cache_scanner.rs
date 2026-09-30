@@ -172,9 +172,24 @@ async fn run_stages(
 ) -> Vec<CacheItem> {
     let mut tasks = Vec::new();
     for (stage, f) in stages {
-        let home = Arc::new(dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")));
+        // home 的来源分形态：
+        // - 完整版：`$HOME`，本来就是用户家目录
+        // - MAS：**passwd 里的真实 home**。沙箱把 `$HOME` 指向应用自己的
+        //   空 container，用它拼路径会让所有 `~/Library/...` 落到那个
+        //   空目录，扫出 0 B —— 实测 13.99 GB 的缓存在 App Store 版显示 0
+        //   就是这么来的。改成真实 home 之后，能否读到取决于用户有没有
+        //   授权过对应目录（见 folder_access::enter_granted_scopes）。
+        let home = Arc::new(crate::folder_access::scanner_home());
         let sink = progress.clone();
         tasks.push(tokio::task::spawn_blocking(move || {
+            // 在**这个阻塞任务内部**进入授权作用域，任务结束即释放。
+            //
+            // 为什么不能提到外面持着：`SecurityScope` 里是一个 ObjC NSURL，
+            // 不是 `Send`；跨 `.await` 持有会让整个 future 失去 `Send`，
+            // 而 Tauri 的命令宏要求 `Future + Send`。而在任务内部
+            // 进入/释放，start 与 stop 依然严格配对（任务结束就析构），
+            // 只是每个 stage 各自进出一次。
+            let _granted_scopes = crate::folder_access::enter_granted_scopes();
             if let Some(sink) = &sink {
                 sink(crate::scan_progress::StageUpdate::running(stage));
             }

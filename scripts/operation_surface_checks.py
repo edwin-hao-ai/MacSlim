@@ -35,6 +35,9 @@ EXPECTED_IPC_COMMANDS = (
     "get_build_flavor",
     # 纯元数据：探测完全磁盘访问权限（沙箱下用户不主动授权就读不到敏感路径）
     "get_fda_status",
+"list_folder_access",
+"grant_folder_access",
+"revoke_folder_access",
     "get_system_health",
     "scan_all",
     "list_all_processes",

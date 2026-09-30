@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Flavor } from "@/lib/flavor";
+import type { FolderTarget, ProcessInfo } from "@/lib/ipcTypes";
+
+export type { FolderTarget } from "@/lib/ipcTypes";
 
 export type { UnlistenFn };
 
@@ -14,43 +17,9 @@ export type SystemHealth = {
   disk_percent: number;
 };
 
-export type ProcessKind = "zombie" | "idle" | "hog" | "dev" | "system" | "foreground";
-
-/**
- * 后端下发的插值参数：`[参数名, 参数值]` 二元组数组
- * （Rust `Vec<(String, String)>` 的 JSON 形状）。
- *
- * 渲染时用 `paramsToRecord` 转成 `t()` 认的对象，或直接用 `tText()`。
- */
 export type I18nParams = [string, string][];
 
-export type ProcessInfo = {
-  selection_key: string;
-  pid: number;
-  name: string;
-  exe: string;
-  start_time: number;
-  cpu_percent: number;
-  memory_mb: number;
-  kind: ProcessKind;
-  risk: "safe" | "low" | "dev" | "hidden";
-  default_select: boolean;
-  /**
-   * 分类理由的 i18n key + 插值参数，译文在前端词典里（`tText`）。
-   *
-   * 「受保护（原因）」与「端口 N（运行中的服务，请确认）」这两段**不在**这里 ——
-   * 它们分别由 `protected_reason_key` 和 `ports` 独立携带，句子由前端拼。
-   * 后端只负责判定「这个进程为什么是这一类」。
-   */
-  reason_key: string;
-  reason_params: I18nParams;
-  ports: number[];
-  icon_base64: string | null;
-  protected: boolean;
-  protected_reason_key: string | null;
-  protected_reason_params: I18nParams;
-  whitelisted: boolean;
-};
+export type { ProcessInfo, ProcessKind } from "@/lib/ipcTypes";
 
 export type ScanResult = {
   health: SystemHealth;
@@ -662,6 +631,28 @@ export type CacheSnapshotView = {
 
 export async function scanCache(): Promise<SnapshotResult<CacheSnapshotView>> {
   return invoke("scan_cache");
+}
+
+// ========== 文件夹访问授权（App Store 版） ==========
+//
+// 三个函数刻意写得很短：本文件离 800 行硬上限只剩十几行余量，
+// 而「只有 tauri.ts 能调 invoke」是仓库门禁，硬约束。
+// 背景与取舍见 `ipcTypes.ts` 的模块注释。
+
+export async function listFolderAccess(): Promise<FolderTarget[]> {
+  return invoke("list_folder_access");
+}
+
+/** 弹系统文件选择框让用户授权。返回 false = 用户取消。 */
+export async function grantFolderAccess(
+  targetKey: string,
+  prompt: string,
+): Promise<boolean> {
+  return invoke("grant_folder_access", { targetKey, prompt });
+}
+
+export async function revokeFolderAccess(targetKey: string): Promise<void> {
+  return invoke("revoke_folder_access", { targetKey });
 }
 
 // ========== 扫描阶段进度事件 ==========
