@@ -167,13 +167,50 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def find_or_create(env: dict, path: str, kind: str, body: dict, dry: bool) -> str | None:
-    """返回 id；已存在就返回现有 id。Apple 的 GET_INSTANCE 可用，GET_COLLECTION 被禁。"""
+def lookup_localization(env: dict, lookup_path: str) -> dict | None:
+    """按 filter 路径查现有本地化。
+
+    带 filter 的路径返回数组，不带 filter 的返回单个对象 —— 两种都认。
+    ASC 对部分资源禁 GET_COLLECTION，所以「先列后取」这条路走不通，
+    只能靠 filter 直查。
+    """
     try:
-        return body["data"]["id"]
-    except KeyError:
-        fail(f"缺少 {kind} 的 id")
+        found = mas.request("GET", lookup_path, env)["data"]
+    except SystemExit:
         return None
+    if isinstance(found, list):
+        return found[0] if found else None
+    return found if isinstance(found, dict) and found else None
+
+
+def create_localization(
+    env: dict,
+    collection_path: str,
+    kind: str,
+    attributes: dict,
+    relationship_body: dict,
+    label: str,
+    dry: bool,
+) -> str:
+    """新建一条本地化。
+
+    POST 时 locale **必须**带上（Apple: "You must provide a value for the
+    attribute 'locale'"）—— 它是 PATCH 时不可变、POST 时必填的那个字段。
+    """
+    payload = {
+        "data": {
+            "type": kind,
+            "attributes": attributes,
+            "relationships": relationship_body,
+        }
+    }
+    if dry:
+        print(f"  [dry-run] 将创建 {kind} ({label})")
+        return ""
+    created = mas.request("POST", collection_path, env, payload)
+    new_id = created["data"]["id"]
+    print(f"  创建 {kind} {new_id} ({label})")
+    return new_id
 
 
 def upsert(
@@ -187,14 +224,7 @@ def upsert(
     relationship_body: dict | None = None,
 ) -> str:
     """按 localizable id 找现有记录，找不到就 POST 新建。"""
-    try:
-        found = mas.request("GET", lookup_path, env)["data"]
-        # 带 filter 的路径返回数组，不带 filter 的返回单个对象 —— 两种都认
-        existing = found[0] if isinstance(found, list) and found else (
-            found if isinstance(found, dict) and found else None
-        )
-    except SystemExit:
-        existing = None
+    existing = lookup_localization(env, lookup_path)
     if existing:
         # PATCH 时**不能带 locale**：它是不可变字段，带上会让 Apple 返回
         # 405 METHOD_NOT_ALLOWED —— 而 405 看起来像「这个资源不支持 PATCH」，
@@ -221,23 +251,16 @@ def upsert(
                 "data": {"type": "appStoreVersions", "id": VERSION_ID}
             }
         }
-    # POST 时 locale **必须**带上（Apple: "You must provide a value for
-    # the attribute 'locale'"）。它是 PATCH 时不可变、POST 时必填的那个字段。
-    create_attrs = dict(attributes)
-    payload = {
-        "data": {
-            "type": kind,
-            "attributes": create_attrs,
-            "relationships": relationship_body,
+    if relationship_body is None:
+        relationship_body = {
+            "appStoreVersion": {
+                "data": {"type": "appStoreVersions", "id": VERSION_ID}
+            }
         }
-    }
-    if dry:
-        print(f"  [dry-run] 将创建 {kind} ({relationship_filter})")
-        return ""
-    created = mas.request("POST", collection_path, env, payload)
-    new_id = created["data"]["id"]
-    print(f"  创建 {kind} {new_id} ({relationship_filter})")
-    return new_id
+    return create_localization(
+        env, collection_path, kind, dict(attributes), relationship_body,
+        relationship_filter, dry,
+    )
 
 
 def existing_whats_new(env: dict, localization_id: str) -> str | None:
