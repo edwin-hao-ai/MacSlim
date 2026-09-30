@@ -42,6 +42,13 @@ pub struct ProcessSample {
     /// 累计 CPU 时间（纳秒）。**绝对值**，不是百分比。
     pub cpu_nanos: u64,
     pub thread_count: i32,
+    /// 进程的可执行文件路径。
+    ///
+    /// 「应用程序」页靠它把进程按 `.app` bundle 聚合。沙箱里**大多数进程
+    /// 拿不到**（可执行文件在别的 app 的 container 或受保护位置），所以是
+    /// `Option`；拿不到时统一用 `None`，不用空串 —— 空串和「未知」在 UI
+    /// 上会被渲染成两样东西，约定统一掉，下游就不用猜。
+    pub exe_path: Option<String>,
 }
 
 /// 用 `sysctl(KERN_PROC_ALL)` 枚举 PID。`None` = 系统调用被拒。
@@ -118,7 +125,30 @@ pub fn sample_process(pid: i32) -> Option<ProcessSample> {
         resident_bytes: task.pti_resident_size,
         cpu_nanos: task.pti_total_user.saturating_add(task.pti_total_system),
         thread_count: task.pti_threadnum,
+        exe_path: exe_path(pid),
     })
+}
+
+/// 取进程的可执行文件路径。拿不到（权限、或进程已退出）时 `None`。
+fn exe_path(pid: i32) -> Option<String> {
+    // MAXPATHLEN = 1024；缓冲区不足时内核返回 -1 而不是截断，所以宁可
+    // 给足再判长度。
+    let mut buffer = vec![0u8; 1024];
+    // SAFETY: buffer 是长度为 1024 的已初始化缓冲区，buffersize 与它一致。
+    // 返回值是实际写入的字节数（含结尾 NUL），为负表示失败。
+    let written = unsafe {
+        libc::proc_pidpath(
+            pid,
+            buffer.as_mut_ptr().cast(),
+            buffer.len() as libc::c_uint,
+        )
+    };
+    if written <= 0 {
+        return None;
+    }
+    let end = (written as usize).min(buffer.len());
+    let chars: Vec<libc::c_char> = buffer[..end].iter().map(|b| *b as libc::c_char).collect();
+    c_str_field(&chars)
 }
 
 /// 取全量快照。

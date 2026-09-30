@@ -240,6 +240,8 @@ fn report_serializes_to_json_with_the_fields_diagnostics_depend_on() {
             can_signal_self: true,
             snapshot_count: 0,
             top_by_memory: vec![],
+            with_exe_path: 0,
+            exe_samples: vec![],
         },
         health_readable: true,
     };

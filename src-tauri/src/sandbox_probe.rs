@@ -376,6 +376,18 @@ pub fn print_report() {
                 .join("、")
         );
     }
+    println!(
+        "可执行路径：{}/{} 个进程拿得到，样例 {}",
+        report.processes.with_exe_path,
+        report.processes.snapshot_count,
+        report
+            .processes
+            .exe_samples
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("、")
+    );
     println!("系统健康读数可信：{}", report.health_readable);
 }
 
@@ -463,6 +475,11 @@ pub struct ProcessVisibility {
     pub snapshot_count: usize,
     /// 明细里最重的三个进程，按常驻内存降序。只为人工核对用。
     pub top_by_memory: Vec<(String, u64)>,
+    /// 快照里有多少个进程拿得到可执行路径。「应用程序」页按 .app bundle
+    /// 聚合靠的就是它 —— 拿不到就聚合不出来。
+    pub with_exe_path: usize,
+    /// 拿到的可执行路径样例，人工核对用。
+    pub exe_samples: Vec<String>,
 }
 
 /// 用 `sysctl(KERN_PROC_ALL)` 枚举进程。`None` 表示系统调用本身被拒。
@@ -527,6 +544,12 @@ pub fn process_visibility() -> ProcessVisibility {
         can_signal_self: can_signal_self(),
         snapshot_count: snapshot.len(),
         top_by_memory,
+        with_exe_path: snapshot.iter().filter(|p| p.exe_path.is_some()).count(),
+        exe_samples: snapshot
+            .iter()
+            .filter_map(|p| p.exe_path.clone())
+            .take(3)
+            .collect(),
     }
 }
 

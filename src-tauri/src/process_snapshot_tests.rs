@@ -132,6 +132,7 @@ fn cpu_percent_is_derived_from_the_delta_not_the_absolute() {
         resident_bytes: 1024,
         cpu_nanos: 1_000_000_000,
         thread_count: 1,
+        exe_path: None,
     }];
     let later = vec![ProcessSample {
         pid: 1,
@@ -142,6 +143,7 @@ fn cpu_percent_is_derived_from_the_delta_not_the_absolute() {
         // 1 秒 CPU 时间，间隔 2 秒 → 50%
         cpu_nanos: 2_000_000_000,
         thread_count: 1,
+        exe_path: None,
     }];
     let percents = cpu_percent(&base, &later, 2.0);
     assert!((percents.get(&1).copied().unwrap_or(-1.0) - 50.0).abs() < 0.01);
@@ -157,6 +159,7 @@ fn cpu_percent_is_zero_when_nothing_moved() {
         resident_bytes: 1,
         cpu_nanos: 500,
         thread_count: 1,
+        exe_path: None,
     }];
     assert_eq!(cpu_percent(&same, &same, 1.0).get(&7).copied(), Some(0.0));
 }
@@ -173,6 +176,7 @@ fn cpu_percent_ignores_processes_that_were_not_there_before() {
         resident_bytes: 1,
         cpu_nanos: 999_999_999_999,
         thread_count: 1,
+        exe_path: None,
     }];
     assert_eq!(
         cpu_percent(&before, &after, 1.0).get(&99).copied(),
@@ -192,6 +196,7 @@ fn cpu_percent_never_exceeds_a_hundred() {
         resident_bytes: 1,
         cpu_nanos: 0,
         thread_count: 8,
+        exe_path: None,
     }];
     let after = vec![ProcessSample {
         pid: 5,
@@ -201,6 +206,7 @@ fn cpu_percent_never_exceeds_a_hundred() {
         resident_bytes: 1,
         cpu_nanos: 10_000_000_000,
         thread_count: 8,
+        exe_path: None,
     }];
     let value = cpu_percent(&before, &after, 1.0);
     assert!(value[&5] <= 100.0, "单次采样间隔 1 秒却算出 {}%", value[&5]);
@@ -216,5 +222,62 @@ fn pids_have_no_duplicates_and_look_like_pids() {
     for pid in &pids {
         assert!(seen.insert(*pid), "PID {pid} 重复出现 —— 偏移很可能错了");
         assert!(*pid > 0 && *pid < 1_000_000, "PID {pid} 不像真的");
+    }
+}
+
+// ===== 可执行路径 =====
+//
+// 「应用程序」页把进程按 .app bundle 聚合，靠的是进程的可执行路径。
+// 有了 exe 路径，MAS 版就不只是「进程监控」，还能有「运行中的应用」——
+// 那是交接文档里被记成「应用程序 0」的那一页。
+//
+// 路径本身在沙箱里**读不到**（进程的可执行文件大多在 /Applications 之外，
+// 或在别的 app 的 container 里），所以预期是「拿不到就留空」而不是崩溃。
+
+#[test]
+fn our_own_executable_path_is_recoverable() {
+    let me = std::process::id() as i32;
+    let sample = super::sample_process(me).expect("应当能采到自己");
+    let exe = sample.exe_path.expect("自己的可执行路径必须拿得到");
+    assert!(
+        exe.starts_with('/'),
+        "可执行路径应当是绝对路径，实际：{exe}"
+    );
+    assert!(
+        exe.contains("macslim"),
+        "可执行路径应当指向测试二进制，实际：{exe}"
+    );
+}
+
+#[test]
+fn a_process_that_does_not_exist_has_no_sample_at_all() {
+    // PID 999999 不可能存在。这条保证「进程刚好退出了」时返回 None 而不是
+    // 拿一个全零的结构体编出一个 pid=0 的假进程。
+    assert!(super::sample_process(999_999).is_none());
+}
+
+#[test]
+fn a_snapshot_keeps_going_after_a_process_disappears_mid_scan() {
+    // 扫描期间进程生灭是常态。不能因为一个进程消失就整个返回空 ——
+    // 那正是「进程管理 0 项」的另一种形式。
+    let snapshot = super::process_snapshot();
+    assert!(
+        snapshot.len() > 50,
+        "跳过消失的进程不该把整份快照吃掉，只剩 {} 条",
+        snapshot.len()
+    );
+}
+
+#[test]
+fn exe_path_is_none_rather_than_empty_string_when_unavailable() {
+    // 空字符串和 None 在 UI 上会被渲染成两样东西（一个是路径、一个是
+    // 「未知」）。约定统一成 None，别让下游自己去猜。
+    let snapshot = super::process_snapshot();
+    for sample in &snapshot {
+        assert!(
+            sample.exe_path.as_deref() != Some(""),
+            "进程 {} 的 exe_path 是空字符串，应当用 None",
+            sample.pid
+        );
     }
 }
