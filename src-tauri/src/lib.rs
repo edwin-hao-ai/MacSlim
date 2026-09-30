@@ -7,6 +7,7 @@ pub mod dev_tool_rules;
 pub mod docker;
 pub mod fda;
 pub mod flavor;
+pub mod folder_access;
 pub mod i18n_text;
 pub mod monitor;
 pub(crate) mod operation_commands;

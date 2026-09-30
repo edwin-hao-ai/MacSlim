@@ -28,8 +28,13 @@
 #
 # ## 凭据
 #
-# 证书与 profile 由 `scripts/create_mas_credentials.py` 通过 App Store Connect
-# API 创建。缺任何一样都在这里直接停下并说明，不静默降级。
+# 证书由钥匙串提供；profile 由 `scripts/create_mas_profile.py` 通过 App Store
+# Connect API 签发。缺任何一样都在这里直接停下并说明，不静默降级。
+#
+# **每次给 entitlements.mas.plist 加/删一条 entitlement，都必须重跑一次
+# create_mas_profile.py。** 签名与 profile 是两层，少一层不会报错、只会静默
+# 失效 —— 实测踩过：`bookmarks.app-scope` 加进签名后 bookmark 仍然解析失败，
+# 查了一圈才发现是 profile 是加之前签的。
 set -euo pipefail
 
 MODE="${1:-all}"
@@ -67,9 +72,9 @@ preflight() {
   info "发布前检查"
   security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY" \
     || fail "钥匙串里没有签名身份：$SIGN_IDENTITY
-    先跑 python3 scripts/create_mas_credentials.py"
+    先跑 python3 scripts/create_mas_profile.py"
   [ -f "$PROFILE" ] || fail "找不到 provisioning profile：$PROFILE
-    先跑 python3 scripts/create_mas_credentials.py"
+    先跑 python3 scripts/create_mas_profile.py"
   [ -f "$PRIV" ] || fail "找不到 $PRIV —— App Store 要求隐私清单"
   echo "  签名身份: $SIGN_IDENTITY"
   echo "  profile:   $PROFILE"

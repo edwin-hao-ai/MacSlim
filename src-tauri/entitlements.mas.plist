@@ -19,11 +19,9 @@
 
         权限逐条说明：
         - app-sandbox：MAS 上架的硬性要求
-        - files.user-selected.read-write：用户用文件选择器/废纸篓授权的路径
-        - files.all：读 ~/Library/Caches、~/.npm、~/.cargo 等。
-          这一条实际上仍需用户在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」
-          里显式授予（见 SettingsView 的 FDA 引导），entitlement 本身只是
-          允许 app 申请，不等于自动获得
+        - files.user-selected.read-write：用户用文件选择框授权的路径
+        - files.bookmarks.app-scope：让上面那次授权可以**跨启动持久化**
+          （见下方详细说明）
         - temporary-exception.*：MAS 不支持此键，因此**不写**。
           Developer ID 版靠 SIP 也拿不到任意路径，这里靠 FDA + 用户选择器
         - network.client：仅自动更新检查。MAS 版实际不注册 updater 插件，
@@ -37,7 +35,37 @@
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
 
-    <key>com.apple.security.files.all</key>
+    <!--
+        刻意**没有** `com.apple.security.files.all`。
+
+        它读作「可读写用户系统上的所有文件」，但那条 entitlement
+        **只在 Developer ID 分发里存在**，App Store 的 profile 不会授权它。
+        挂着它有三个坏处：让 MAS 构建自认为有它实际没有的能力
+        （历史上 `fda.rs` 的错误归因就是这么来的）、每次签名都产生一条
+        「请求了但没拿到」的 entitlement、以及审核阶段多一条
+        「为什么要这么多权限」的质疑 —— QA1773 明确把「多要权限」列为
+        比「少做功能」更容易被拒的理由。
+    -->
+
+    <!--
+        文件夹访问授权（security-scoped bookmark）。
+
+        实测（2026-09-30，MAS 包真机）：沙箱把 $HOME 重定向到应用自己的
+        container，真实 home 下 ~/Library/Caches 的 read_dir 直接 EPERM。
+        而 Apple 文档明说 App Store 应用**即使拿到完全磁盘访问权限，
+        沙箱仍然强制执行自己的文件限制** —— 也就是说 FDA 那条路根本走不通。
+
+        这条 entitlement 让「用户用文件选择框授权某个目录」可以被持久化
+        （Apple 官方文档 Enabling Security-Scoped Bookmark and URL Access）。
+        它不是「我们自己决定要读哪」，而是「用户亲手在系统文件选择框里
+        选定的那一个目录」—— 这与绕过沙箱有本质区别，也是 App Store
+        审核认可的方式（先例：PureSpace）。
+
+        缺了它，上面那段流程会静默失败：bookmark 能创建、也能解析，
+        但 startAccessingSecurityScopedResource 拿不到访问权，
+        于是 read_dir 照样 EPERM —— 代码看起来完全正常。
+    -->
+    <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
 
     <key>com.apple.security.network.client</key>

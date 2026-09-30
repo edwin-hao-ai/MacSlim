@@ -388,6 +388,24 @@ pub fn print_report() {
             .collect::<Vec<_>>()
             .join("、")
     );
+    println!(
+        "文件夹授权能力：{}",
+        if report.processes.bookmark_supported {
+            format!(
+                "security-scoped bookmark 往返成功（{}）—— 「授权目录」这条路可用",
+                report.processes.bookmark_path.as_deref().unwrap_or("?")
+            )
+        } else {
+            format!(
+                "不可用：{}",
+                report
+                    .processes
+                    .bookmark_error
+                    .as_deref()
+                    .unwrap_or("未知原因")
+            )
+        }
+    );
     println!("系统健康读数可信：{}", report.health_readable);
 }
 
@@ -419,7 +437,20 @@ pub fn run() -> ProbeReport {
         real_home: real_home.map(|p| p.display().to_string()),
         home_is_container,
         findings,
-        processes: process_visibility(),
+        processes: {
+            let mut visibility = process_visibility();
+            match bookmark_roundtrip() {
+                Ok(path) => {
+                    visibility.bookmark_supported = true;
+                    visibility.bookmark_path = Some(path.display().to_string());
+                }
+                Err(reason) => {
+                    visibility.bookmark_supported = false;
+                    visibility.bookmark_error = Some(reason);
+                }
+            }
+            visibility
+        },
         health_readable: health_is_plausible(),
     }
 }
@@ -480,6 +511,15 @@ pub struct ProcessVisibility {
     pub with_exe_path: usize,
     /// 拿到的可执行路径样例，人工核对用。
     pub exe_samples: Vec<String>,
+    /// security-scoped bookmark 在沙箱里能不能创建并解析。
+    ///
+    /// 这是「文件夹访问授权」这条路的**全部技术前提**：entitlement
+    /// （`bookmarks.app-scope`）生效、`startAccessingSecurityScopedResource`
+    /// 能拿到访问权。在开发机上这一项必然为 true（不在沙箱里），只有 MAS
+    /// 包的输出才有意义。
+    pub bookmark_supported: bool,
+    pub bookmark_path: Option<String>,
+    pub bookmark_error: Option<String>,
 }
 
 /// 用 `sysctl(KERN_PROC_ALL)` 枚举进程。`None` 表示系统调用本身被拒。
@@ -544,6 +584,9 @@ pub fn process_visibility() -> ProcessVisibility {
         can_signal_self: can_signal_self(),
         snapshot_count: snapshot.len(),
         top_by_memory,
+        bookmark_supported: false,
+        bookmark_path: None,
+        bookmark_error: None,
         with_exe_path: snapshot.iter().filter(|p| p.exe_path.is_some()).count(),
         exe_samples: snapshot
             .iter()
@@ -585,6 +628,49 @@ fn sysctl_read(mib: &mut [libc::c_int], buffer: &mut [u8]) -> Option<usize> {
         )
     };
     (rc == 0).then_some(len)
+}
+
+/// 在应用**自己 container 里**跑完整 bookmark 往返。
+///
+/// 选 container 而不是 `/Applications`：container 内的路径本来就带隐式授权，
+/// 所以这里测的纯粹是「FFI 声明 + entitlement + 解析 + startAccessing」
+/// 这条链路本身。拿 `/Applications` 测会被一个合法现象骗到 ——
+/// 那个目录虽然沙箱放行，但**从来没有用户通过文件选择框授权过它**，
+/// 于是书签背后没有用户同意，`startAccessing` 拿不到访问权。
+/// 那是正确行为，不是 bug。
+fn bookmark_roundtrip() -> Result<PathBuf, String> {
+    use crate::folder_access::ffi;
+    let target = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "拿不到 $HOME".to_string())?
+        .join("Documents");
+    std::fs::create_dir_all(&target).map_err(|e| format!("准备探针目录失败：{e}"))?;
+
+    let bookmark = ffi::create_bookmark(&target).ok_or_else(|| "创建书签被拒".to_string())?;
+    // 二分诊断：同一份书签**不带** security-scope 选项再解析一次。
+    // 能解析 → 创建时的掩码写错了，产出的根本不是 scoped 书签；
+    // 不能解析 → 问题在沙箱层面（entitlement 未生效 / 缺用户授权）。
+    let plain = if ffi::resolve_plain(&bookmark).is_some() {
+        "同一书签不带 scope 反而能解析 → 创建掩码写错，产出的不是 security-scoped 书签"
+    } else {
+        "同一书签不带 scope 也解析不了 → 问题在沙箱层面，不是掩码"
+    };
+    let scope = ffi::resolve_detailed(&bookmark).map_err(|error| {
+        let reason = match error {
+            ffi::BookmarkError::ResolveFailed => {
+                "URLByResolvingBookmarkData 返回 nil：书签损坏、路径已不存在，或 entitlement 未生效"
+            }
+            ffi::BookmarkError::AccessNotGranted => {
+                "解析成功但 startAccessing 返回 false：书签背后没有用户授权"
+            }
+            ffi::BookmarkError::DecodeFailed => "base64 解码失败",
+            _ => "未知",
+        };
+        format!("卡在 {} —— {reason}（{plain}）", error.i18n_key())
+    })?;
+    std::fs::read_dir(scope.path())
+        .map_err(|_| "拿到作用域但仍读不了目录 —— startAccessing 没生效".to_string())?;
+    Ok(PathBuf::from(scope.path()))
 }
 
 fn count_processes() -> usize {

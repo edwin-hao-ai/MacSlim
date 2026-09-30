@@ -92,11 +92,29 @@ class MasEntitlementsTests(unittest.TestCase):
         self.assertEqual(offenders, [], f"MAS 不支持这些键：{offenders}")
 
     def test_requests_the_file_permissions_the_product_needs(self) -> None:
-        for key in (
-            "com.apple.security.files.user-selected.read-write",
+        # `files.user-selected.read-write`：用户用文件选择框授权的路径。
+        self.assertTrue(
+            self.entitlements.get("com.apple.security.files.user-selected.read-write")
+        )
+        # `files.bookmarks.app-scope`：让那次授权能跨启动持久化。
+        # 少了它，上面那次授权每次启动都要重做一遍。
+        self.assertTrue(
+            self.entitlements.get("com.apple.security.files.bookmarks.app-scope"),
+            "缺少 bookmarks.app-scope：用户授权无法持久化，每次启动都要重新选",
+        )
+
+    def test_does_not_claim_file_access_it_can_never_get(self) -> None:
+        # `com.apple.security.files.all`（读用户系统所有文件）**只在 Developer ID
+        # 分发里存在**，App Store 的 profile 不会授权它。挂着它有三个坏处：
+        # 让 MAS 构建自认为有它实际没有的能力（历史上 fda.rs 的错误归因就是
+        # 这么来的）、签名里多一条「请求了但没拿到」的 entitlement、以及审核时
+        # 多一条「为什么要这么多权限」的质疑 —— QA1773 明确把「多要权限」
+        # 列为比「少做功能」更容易被拒的理由。
+        self.assertNotIn(
             "com.apple.security.files.all",
-        ):
-            self.assertTrue(self.entitlements.get(key), f"缺少 {key}")
+            self.entitlements,
+            "MAS 版不该请求 files.all —— 那是 Developer ID 专属，写在这里只会误导",
+        )
 
     def test_does_not_claim_apple_events(self) -> None:
         # MAS 版不该发 AppleEvent（优雅退出应用的路径在 MAS 下不走）
@@ -409,3 +427,55 @@ class MasProcessMonitoringTests(unittest.TestCase):
         # 字段少一个编译不过，多一个也会编译不过 —— 这正是我们要的。
         self.assertIn("use crate::scanner::ProcessRow;", self.monitor)
         self.assertIn("-> Vec<ProcessRow>", self.monitor)
+
+
+class MasProfileAndBookmarkTests(unittest.TestCase):
+    """MAS 的签名必须自带文件夹授权能力，而且这条链路要能被自动复核。
+
+    实测（2026-09-30，MAS 包真机，见 docs/mas-capability-matrix.md）：
+
+    - 没有 `bookmarks.app-scope` 时，bookmark **创建成功、解析失败** ——
+      症状是「代码完全正常、功能就是不工作」，不主动查根本发现不了。
+    - 补上 entitlement 后，**解析成功**，卡在 `startAccessingSecurityScopedResource`
+      返回 false —— 因为还没有任何用户通过文件选择框授权过那个目录。
+      这是正确行为，不是 bug。
+
+    所以这里断言的是「链路的前半段是通的」，后半段（用户点面板）由人验。
+    """
+
+    def setUp(self) -> None:
+        self.entitlements = load_plist("entitlements.mas.plist")
+        self.monitor = strip_rust_comments(
+            (TAURI / "src/sandbox_probe.rs").read_text(encoding="utf-8")
+        )
+        self.script = (ROOT / "scripts/release-mas.sh").read_text(encoding="utf-8")
+
+    def test_the_signed_entitlements_include_app_scope(self) -> None:
+        self.assertTrue(self.entitlements.get("com.apple.security.app-sandbox"))
+        self.assertTrue(
+            self.entitlements.get("com.apple.security.files.bookmarks.app-scope")
+        )
+
+    def test_the_probe_reports_the_bookmark_chain_step_by_step(self) -> None:
+        # 「创建成功但解析失败」和「解析成功但拿不到访问权」在上面的症状里
+        # 长得一模一样。合成一句「授权失败」会让人一直查错方向 ——
+        # 实际就踩过：明明 entitlement 已经加进签名，却被误判成
+        # 「profile 缺 entitlement」，而 MAS 的 profile 本来就不该有沙箱
+        # entitlement，那是个错误方向。
+        for step in ("KERN_PROC_ALL", "resolve_plain", "AccessNotGranted"):
+            self.assertIn(step, self.monitor, f"探针缺 {step}")
+
+    def test_the_profile_regeneration_script_exists_and_is_documented(self) -> None:
+        # release-mas.sh 的报错信息指向 scripts/create_mas_credentials.py，
+        # 而那个文件**从来不存在**（实测：脚本报错让人去跑一个不存在的脚本）。
+        # 真正需要的是「改了 entitlement 要重新签 profile」，所以补了这个。
+        script = ROOT / "scripts/create_mas_profile.py"
+        self.assertTrue(script.exists(), "缺少 MAS profile 生成脚本")
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("entitlements.mas.plist", text)
+        self.assertIn("MAC_APP_STORE", text)
+
+    def test_release_script_points_at_the_script_that_actually_exists(self) -> None:
+        # 别再指向 create_mas_credentials.py
+        self.assertNotIn("create_mas_credentials.py", self.script)
+        self.assertIn("create_mas_profile.py", self.script)

@@ -58,6 +58,15 @@ nix = { version = "0.29", features = ["signal", "process", "user"] }
 # 而 sysinfo 在 MAS 构建下走 `apple-sandbox` 分支、那个分支是返回全 0 的桩，
 # 不能拿它当「沙箱读不到进程」的证据。libc 本来就已被传递依赖引入。
 libc = "0.2"
+# MAS 版的「文件夹访问授权」层：NSOpenPanel + security-scoped bookmark。
+#
+# 只依赖 objc2（运行时），不直接依赖 objc2-foundation / objc2-app-kit：
+# - 0.3.2 版 objc2-foundation 的 src/generated/ 缺 mod.rs，作为直接依赖编译不过
+# - 而且它**根本没有**导出 NSURL 的书签方法（URLByResolvingBookmarkData、
+#   bookmarkDataWithOptions:…、startAccessingSecurityScopedResource），
+#   本来就得自己 msg_send 声明
+# 所以这一层把需要的东西全当不透明对象处理，签名由 objc2 声明。
+objc2 = "0.6"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
 chrono = { version = "0.4", features = ["serde"] }
