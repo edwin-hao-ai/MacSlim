@@ -40,7 +40,11 @@ APP_ARCHIVE_PATH="${APP_PATH}.zip"
 rm -f "$UPDATER_PATH" "$UPDATER_SIG_PATH" "$UPDATER_STAMP_PATH"
 
 if [ ! -d "$APP_PATH" ]; then
-  echo "错误: 找不到 $APP_PATH，请先跑 bun run tauri build --target $RUST_TARGET" >&2
+  # 花括号是必需的：macOS 自带 bash 3.2 在 UTF-8 locale 下会用 locale 感知的
+  # isalnum() 判断变量名合法性，多字节字符的字节被当成「字母」吞进变量名，
+  # 于是这里的全角逗号会让脚本在 set -u 下报 `unbound variable` 而不是
+  # 打出本该给用户看的错误信息。见 scripts/tests 的门禁。
+  echo "错误: 找不到 ${APP_PATH}，请先跑 bun run tauri build --target ${RUST_TARGET}" >&2
   exit 1
 fi
 

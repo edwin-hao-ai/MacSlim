@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 import plistlib
+import re
 import unittest
 from pathlib import Path
 
@@ -232,6 +233,79 @@ class MasTargetIsolationTests(unittest.TestCase):
         # nsis/app/dmg），写上去会在 schema 校验阶段直接失败
         self.config = load_json("tauri.mas.conf.json")
         self.assertEqual(self.config["bundle"]["targets"], ["app"])
+
+
+class ShellInterpolationTests(unittest.TestCase):
+    """所有 shell 脚本里都不许出现「裸 `$var` 紧跟非 ASCII 字节」。
+
+    这不是风格问题，是一个会真炸的 macOS 专属 bug：
+
+    macOS 自带的 bash 3.2 用 locale 感知的 `isalnum()` 判断标识符的
+    合法性，而中文全角标点（`，（）：` 等）的 UTF-8 字节在 UTF-8 locale 下
+    `isalnum()` 为真，于是被并进变量名。`$APP_PATH，请先跑` 会被解析成查
+    一个名字里含 `，` 三个字节的变量，在 `set -u` 下报
+    `APP_PATH，请先跑: unbound variable`。
+
+    危害在于它**只在该错误分支触发**：构建顺利时永远看不到，一旦出事，
+    用户拿到的是「unbound variable」而不是脚本本来想给的错误信息。
+    实测在 scripts/release-mas.sh 与 scripts/sign.sh 各中过一次。
+    """
+
+    # 注释里的同样写法是无害的（bash 不解析注释），但为了让这条门禁
+    # 简单可靠、也为了让注释本身不误导后来人，注释里也一律用花括号。
+    PATTERN = re.compile(rb"\$([A-Za-z_][A-Za-z0-9_]*)(?=[\x80-\xff])")
+
+    def _scripts(self) -> list[Path]:
+        found = []
+        for path in sorted(ROOT.rglob("*.sh")):
+            relative = path.relative_to(ROOT).as_posix()
+            if relative.startswith(("node_modules/", "dist/")) or "/target" in relative:
+                continue
+            found.append(path)
+        return found
+
+    def test_no_bare_variable_is_followed_by_a_multibyte_character(self) -> None:
+        offenders: list[str] = []
+        for path in self._scripts():
+            data = path.read_bytes()
+            for match in self.PATTERN.finditer(data):
+                line = data[: match.start()].count(b"\n") + 1
+                name = match.group(1).decode()
+                context = data[match.start() : match.start() + 24].decode(
+                    "utf-8", "replace"
+                )
+                offenders.append(
+                    f"{path.relative_to(ROOT).as_posix()}:{line} "
+                    f"${name} → {context!r}"
+                )
+        self.assertEqual(
+            offenders,
+            [],
+            "这些裸变量引用紧跟非 ASCII 字节，bash 3.2 会把多字节并入变量名，"
+            f"set -u 下报 unbound variable（改用 ${{var}}）：\n  " + "\n  ".join(offenders),
+        )
+
+    def test_the_check_actually_catches_the_known_offenders(self) -> None:
+        # 门禁自己得先证明有效，否则「一条都没报」可能只是正则写坏了。
+        # bytes 字面量不能直接写非 ASCII，用 UTF-8 字节显式拼：
+        #   ，= \xef\xbc\x8c   （= \xef\xbc\x88
+        should_match = [
+            b'echo "$APP_PATH\xef\xbc\x8cx"',
+            b'echo "$cli\xef\xbc\x88x"',
+            b'echo "$A\xef\xbc\x9ax"',
+        ]
+        should_not_match = [
+            b'echo "${APP_PATH}\xef\xbc\x8cx"',
+            b'echo " $APP_PATH x"',
+            b'echo "$APP_PATH"',
+            b'echo "$APP_PATH "',
+        ]
+        for probe in should_match:
+            with self.subTest(probe=probe):
+                self.assertIsNotNone(self.PATTERN.search(probe), probe)
+        for probe in should_not_match:
+            with self.subTest(probe=probe):
+                self.assertIsNone(self.PATTERN.search(probe), probe)
 
 
 class CargoFeatureTests(unittest.TestCase):

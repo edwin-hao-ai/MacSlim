@@ -104,7 +104,14 @@ strip_cli() {
   local cli="$APP/Contents/MacOS/macslim-cli"
   if [ -f "$cli" ]; then
     rm -f "$cli"
-    echo "  已删除 $cli（沙箱下启动即 SIGTRAP，且对 App Store 用户无价值）"
+    # 注意 `${cli}` 的花括号是必需的，不是风格问题。
+    # macOS 自带的 bash 3.2 在 UTF-8 locale 下用 locale 感知的 isalnum()
+    # 判断变量名合法性，多字节字符（这里是全角左括号）的字节会被判为
+    # 「字母」并吞进变量名 —— 紧跟全角左括号的裸引用于是变成查一个
+    # 名字里带三个字节的变量，在 `set -u` 下直接报 `unbound variable`。
+    # 实测踩过：MAS 构建卡死在这一行，报
+    #   release-mas.sh: line 107: cli?: unbound variable
+    echo "  已删除 ${cli}（沙箱下启动即 SIGTRAP，且对 App Store 用户无价值）"
   fi
 }
 
