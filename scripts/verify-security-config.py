@@ -14,7 +14,10 @@ except ModuleNotFoundError: import release_docs_contract
 validate_release_documentation_contract = release_docs_contract.validate_release_documentation_contract
 try: from scripts import operation_contract
 except ModuleNotFoundError: import operation_contract
-EXPECTED_CAPABILITIES = {"core:app:allow-version", "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-start-dragging", "autostart:allow-enable", "autostart:allow-disable", "autostart:allow-is-enabled", "notification:allow-is-permission-granted", "notification:allow-request-permission", "notification:allow-notify", "process:allow-restart", "updater:allow-check", "updater:allow-download-and-install"}
+EXPECTED_CAPABILITIES = {"core:app:allow-version", "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-start-dragging", "autostart:allow-enable", "autostart:allow-disable", "autostart:allow-is-enabled", "notification:allow-is-permission-granted", "notification:allow-request-permission", "notification:allow-notify", "process:allow-restart", "updater:allow-check", "updater:allow-download-and-install",
+ # FDA 引导：点「打开系统设置」要跳 `x-apple.systempreferences:` 深链。
+ # 只放行 open-url 单条，不放宽成整组 opener 权限。
+ "opener:allow-open-url"}
 EXPECTED_ENTITLEMENTS = {"com.apple.security.cs.allow-jit", "com.apple.security.network.client", "com.apple.security.automation.apple-events"}
 ALLOWED_REMOTE_HOSTS = {"ipc.localhost", "asset.localhost"}
 ALLOWED_SCRIPT_SOURCES = {"'self'", "ipc:"}

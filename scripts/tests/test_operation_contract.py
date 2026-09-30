@@ -58,7 +58,7 @@ class RepositoryContractTests(unittest.TestCase):
         # 要加/删命令时，先想清楚它属于 DESTRUCTIVE_IPC_COMMANDS 吗。
         commands = MODULE.rust_invoke_handler_commands(REPOSITORY_FILES["lib.rs"])
         self.assertEqual(commands, list(MODULE.EXPECTED_IPC_COMMANDS))
-        self.assertEqual(len(MODULE.EXPECTED_IPC_COMMANDS), 17)
+        self.assertEqual(len(MODULE.EXPECTED_IPC_COMMANDS), 18)
         self.assertEqual(
             [c for c in MODULE.EXPECTED_IPC_COMMANDS
              if c in MODULE.DESTRUCTIVE_IPC_COMMANDS],
@@ -212,7 +212,7 @@ class IpcCommandSurfaceTests(unittest.TestCase):
     def test_rejects_a_handler_without_any_command(self):
         source = self.base().replace("            check_app_running,", "            /* removed */")
         errors = MODULE.validate_ipc_command_surface(source)
-        self.assertTrue(mark_anything(errors, "generate_handler", "17 个可信 command"), errors)
+        self.assertTrue(mark_anything(errors, "generate_handler", "18 个可信 command"), errors)
         self.assertTrue(mark_anything(errors, "check_app_running"), errors)
 
 

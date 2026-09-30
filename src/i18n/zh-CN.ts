@@ -500,6 +500,16 @@ export const zhCN = {
   },
 
   settings: {
+    fda: {
+      title: "完全磁盘访问权限",
+      granted: "已授权，全部清理与进程能力可用",
+      needUserCache: "缓存清理与进程管理需要完全磁盘访问权限。在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里添加 MacSlim 后即可。",
+      needSystem: "进程枚举需要完全磁盘访问权限。在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里添加 MacSlim 后即可。",
+      needBoth: "缓存清理与进程管理需要完全磁盘访问权限。在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里添加 MacSlim 后即可。",
+      openSettings: "打开系统设置",
+      manualHint: "若按钮无反应，请手动打开「系统设置 → 隐私与安全性 → 完全磁盘访问权限」，把 MacSlim 拖进去并打开开关。",
+      openFailed: "无法自动打开设置页，请手动前往「系统设置 → 隐私与安全性 → 完全磁盘访问权限」。",
+    },
     general: "通用设置",
     generalDesc: "基础行为开关",
     autostart: "开机自动启动",

@@ -5,6 +5,7 @@ pub mod cache_scanner;
 pub mod cli_operations;
 pub mod dev_tool_rules;
 pub mod docker;
+pub mod fda;
 pub mod flavor;
 pub mod i18n_text;
 pub mod monitor;
@@ -63,6 +64,28 @@ fn whitelist_policy(state: &AppState) -> impl Fn(&str) -> bool + Send + Sync + '
 #[tauri::command]
 fn get_build_flavor() -> &'static str {
     flavor::CURRENT.as_str()
+}
+
+/// 完全磁盘访问权限的探测结果。
+///
+/// 分开报「用户缓存」与「系统目录」两类，因为它们挡住的**能力不同**：
+/// 用户缓存挡的是缓存清理，系统目录挡的是进程枚举。前端要按类给引导文案，
+/// 笼统一句「请授予完全磁盘访问权限」会让用户不知道授权后能干什么。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FdaStatus {
+    /// 能不能读 `~/Library/Caches` —— 决定缓存清理是否可用
+    user_cache: bool,
+    /// 能不能读 `/Library/*` —— 决定进程枚举等是否可用
+    system_dirs: bool,
+}
+
+#[tauri::command]
+fn get_fda_status() -> FdaStatus {
+    FdaStatus {
+        user_cache: fda::user_cache_readable(),
+        system_dirs: fda::system_dirs_readable(),
+    }
 }
 
 // ========== System & Process ==========
@@ -369,6 +392,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -397,6 +421,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_build_flavor,
+            get_fda_status,
             get_system_health,
             scan_all,
             list_all_processes,

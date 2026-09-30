@@ -7,6 +7,7 @@ import {
 } from "@/lib/tauri";
 import { checkForUpdate, downloadAndInstall, type UpdateStatus } from "@/lib/updater";
 import { fmtBytes, fmtRelativeTime } from "@/lib/format";
+import FdaCard from "@/components/FdaCard";
 import { Plus, Trash2, Check, Download, RefreshCw } from "lucide-solid";
 import {
   disable as autostartDisable,
@@ -140,6 +141,11 @@ const SettingsView: Component = () => {
 
   return (
     <div class="flex flex-col gap-5 p-6 h-full overflow-y-auto">
+      {/* FDA 引导放在最上面：没授权时缓存清理与进程管理都是空的，
+          让用户先看到「为什么是空的 + 怎么解决」再去点别的设置。
+          已授权时它显示绿色对勾、直接走人，不占注意力。 */}
+      <FdaCard />
+
       <div class="card p-6">
         <h2 class="text-base font-semibold">{t("settings.general")}</h2>
         <p class="text-xs text-zinc-500 mt-0.5">{t("settings.generalDesc")}</p>

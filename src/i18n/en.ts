@@ -554,6 +554,21 @@ export const en: Dict = {
   },
 
   settings: {
+    fda: {
+      title: "Full Disk Access",
+      granted: "Granted — all cleanup and process features are available",
+      needUserCache:
+        "Cache cleanup and process management need Full Disk Access. Add MacSlim in System Settings → Privacy & Security → Full Disk Access.",
+      needSystem:
+        "Process enumeration needs Full Disk Access. Add MacSlim in System Settings → Privacy & Security → Full Disk Access.",
+      needBoth:
+        "Cache cleanup and process management need Full Disk Access. Add MacSlim in System Settings → Privacy & Security → Full Disk Access.",
+      openSettings: "Open System Settings",
+      manualHint:
+        "If the button does nothing, open System Settings → Privacy & Security → Full Disk Access manually, drag MacSlim in, and turn it on.",
+      openFailed:
+        "Could not open System Settings automatically. Go to System Settings → Privacy & Security → Full Disk Access manually.",
+    },
     general: "General",
     generalDesc: "Behavior toggles",
     autostart: "Launch at login",

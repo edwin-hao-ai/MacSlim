@@ -49,12 +49,16 @@ class SecurityConfigTests(unittest.TestCase):
         errors = MODULE.validate_capabilities({"permissions": ["core:default"]})
         self.assertTrue(any("capability" in error for error in errors))
 
-    def test_current_capability_allowlist_has_exactly_thirteen_unique_permissions(self):
+    def test_current_capability_allowlist_has_exactly_fourteen_unique_permissions(self):
+        # 14 = 原 13 + `opener:allow-open-url`。多这一条只为 FDA 引导：
+        # 点「打开系统设置」要跳 `x-apple.systempreferences:` 深链，MAS 版
+        # 没有它用户就只能自己去找设置页。**只允许 open-url**，不放宽成整组
+        # opener 权限。
         capability_path = SCRIPT_PATH.parents[1] / "src-tauri/capabilities/default.json"
         capabilities = json.loads(capability_path.read_text(encoding="utf-8"))
         permissions = capabilities["permissions"]
-        self.assertEqual(len(MODULE.EXPECTED_CAPABILITIES), 13)
-        self.assertEqual(len(permissions), 13)
+        self.assertEqual(len(MODULE.EXPECTED_CAPABILITIES), 14)
+        self.assertEqual(len(permissions), 14)
         self.assertEqual(len(permissions), len(set(permissions)))
         self.assertEqual(MODULE.validate_capabilities(capabilities), [])
 
@@ -259,10 +263,10 @@ class SecurityConfigTests(unittest.TestCase):
         for permission in MODULE.operation_contract.EXPECTED_IPC_COMMANDS:
             with self.subTest(command=permission):
                 self.assertNotIn(f"allow-{permission}", capabilities["permissions"])
-        self.assertEqual(len(capabilities["permissions"]), 13)
+        self.assertEqual(len(capabilities["permissions"]), 14)
         self.assertEqual(MODULE.validate_capabilities(capabilities), [])
 
-    def test_operation_broker_ipc_surface_is_exactly_seventeen_trusted_commands(self):
+    def test_operation_broker_ipc_surface_is_exactly_eighteen_trusted_commands(self):
         # 17 = 原 16 + `get_build_flavor`（纯元数据：下发 developer_id / mas，
         # 让前端在 App Store 版里藏掉沙箱里做不到的「终止进程」入口）。
         # 破坏性面仍必须精确等于 prepare + execute 两条 —— 下面单独断言。
@@ -271,7 +275,7 @@ class SecurityConfigTests(unittest.TestCase):
         lib = (root / "src-tauri/src/lib.rs").read_text(encoding="utf-8")
         commands = contract.rust_invoke_handler_commands(lib)
         self.assertEqual(commands, list(contract.EXPECTED_IPC_COMMANDS))
-        self.assertEqual(len(commands), 17)
+        self.assertEqual(len(commands), 18)
         self.assertEqual(sorted(contract.rust_declared_commands(lib)), sorted(commands))
         self.assertEqual(
             [name for name in commands if name in contract.DESTRUCTIVE_IPC_COMMANDS],

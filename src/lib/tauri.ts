@@ -427,6 +427,43 @@ export async function getBuildFlavor(): Promise<"developer_id" | "mas"> {
   return invoke("get_build_flavor");
 }
 
+/** 完全磁盘访问权限的探测结果。分两类，因为它们挡住的**能力**不同。 */
+export type FdaStatus = {
+  /** 能不能读 `~/Library/Caches` —— 决定缓存清理是否可用 */
+  userCache: boolean;
+  /** 能不能读 `/Library/*` —— 决定进程枚举等是否可用 */
+  systemDirs: boolean;
+};
+
+/**
+ * 探测完全磁盘访问权限。
+ *
+ * 沙箱下即使带了 `files.all` entitlement，**用户没在系统设置里实际授权时
+ * 敏感路径一律读不到** —— 这不是我们独有的限制，CleanMyMac 的 App Store
+ * 版要读 SMART 也一样需要用户手动授权。
+ */
+export async function getFdaStatus(): Promise<FdaStatus> {
+  return invoke("get_fda_status");
+}
+
+/**
+ * 打开「完全磁盘访问权限」设置页。
+ *
+ * 那个 URL scheme 是系统私有但稳定的（CleanMyMac 等工具也用它）；
+ * 打不开时返回 false，由调用方退回「手动导航」的文案。
+ */
+export async function openFullDiskAccessSettings(): Promise<boolean> {
+  try {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function scanAll(): Promise<SnapshotResult<ScanResult>> {
   return invoke("scan_all");
 }

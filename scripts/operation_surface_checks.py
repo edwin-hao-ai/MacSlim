@@ -33,6 +33,8 @@ EXPECTED_IPC_COMMANDS = (
     # 纯元数据：下发当前构建形态（developer_id / mas），前端据此决定
     # 「终止进程」这类沙箱里做不到的入口要不要出现。零副作用、不碰用户数据。
     "get_build_flavor",
+    # 纯元数据：探测完全磁盘访问权限（沙箱下用户不主动授权就读不到敏感路径）
+    "get_fda_status",
     "get_system_health",
     "scan_all",
     "list_all_processes",
