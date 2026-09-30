@@ -15,10 +15,10 @@ vi.mock("@/i18n", () => ({
 
 import FdaCard from "@/components/FdaCard";
 
-const GRANTED = { userCache: true, systemDirs: true };
-const NEED_CACHE = { userCache: false, systemDirs: true };
-const NEED_SYSTEM = { userCache: true, systemDirs: false };
-const NEED_BOTH = { userCache: false, systemDirs: false };
+const GRANTED = { userCache: true, systemDirs: true, homeRedirected: false, flavor: "developer_id" };
+const NEED_CACHE = { userCache: false, systemDirs: true, homeRedirected: false, flavor: "developer_id" };
+const NEED_SYSTEM = { userCache: true, systemDirs: false, homeRedirected: false, flavor: "developer_id" };
+const NEED_BOTH = { userCache: false, systemDirs: false, homeRedirected: false, flavor: "developer_id" };
 
 describe("FdaCard 完全磁盘访问引导", () => {
   beforeEach(() => {
@@ -90,5 +90,75 @@ describe("FdaCard 完全磁盘访问引导", () => {
     getFdaStatus.mockRejectedValue(new Error("no ipc"));
     render(() => <FdaCard />);
     expect(await screen.findByText("settings.fda.needBoth")).toBeTruthy();
+  });
+});
+
+// ===== MAS 版不该把用户领去开 FDA =====
+//
+// 实测（2026-09-30，MAS 包真机）：沙箱把 `$HOME` 重定向到应用自己的
+// container，用户数据路径根本不在我们能碰的范围里。**授权解决不了。**
+// 而 Apple 文档也明说 App Store 应用即使拿到 FDA，沙箱仍强制执行自己的
+// 文件限制。
+//
+// 所以 MAS 版的卡片必须换掉：说清边界、列出真实可用能力、把「要完整
+// 缓存清理」这件事引流到完整版。继续显示「打开系统设置」按钮只会把用户
+// 领去做一件无效的事 —— 那是比没有引导更糟的引导。
+
+const MAS_REDIRECTED = {
+  userCache: false,
+  systemDirs: true,
+  homeRedirected: true,
+  flavor: "mas" as const,
+};
+
+const DEV_OK = {
+  userCache: true,
+  systemDirs: true,
+  homeRedirected: false,
+  flavor: "developer_id" as const,
+};
+
+describe("FdaCard 在 MAS 版的行为", () => {
+  beforeEach(() => {
+    getFdaStatus.mockReset();
+    openFullDiskAccessSettings.mockReset();
+    openFullDiskAccessSettings.mockResolvedValue(true);
+  });
+  afterEach(cleanup);
+
+  it("不显示「打开系统设置」按钮 —— 授权在 MAS 版无效", async () => {
+    getFdaStatus.mockResolvedValue(MAS_REDIRECTED);
+    render(() => <FdaCard />);
+    await screen.findByTestId("fda-card");
+    expect(
+      screen.queryByRole("button", { name: "settings.fda.openSettings" }),
+    ).toBeNull();
+  });
+
+  it("说清真实原因：沙箱把用户目录换掉了，而不是「你没授权」", async () => {
+    getFdaStatus.mockResolvedValue(MAS_REDIRECTED);
+    render(() => <FdaCard />);
+    expect(await screen.findByText("settings.fda.sandboxed")).toBeTruthy();
+    expect(screen.queryByText("settings.fda.needBoth")).toBeNull();
+    expect(screen.queryByText("settings.fda.needUserCache")).toBeNull();
+  });
+
+  it("给出引流到完整版的入口 —— 用户要完整能力有明确去处", async () => {
+    getFdaStatus.mockResolvedValue(MAS_REDIRECTED);
+    render(() => <FdaCard />);
+    const link = await screen.findByRole("link", {
+      name: "settings.fda.getFullVersion",
+    });
+    expect(link.getAttribute("href")).toContain("vgoapp.com");
+    expect(openFullDiskAccessSettings).not.toHaveBeenCalled();
+  });
+
+  it("完整版行为不变：已授权就是绿勾、无按钮", async () => {
+    getFdaStatus.mockResolvedValue(DEV_OK);
+    render(() => <FdaCard />);
+    expect(await screen.findByText("settings.fda.granted")).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: "settings.fda.getFullVersion" }),
+    ).toBeNull();
   });
 });

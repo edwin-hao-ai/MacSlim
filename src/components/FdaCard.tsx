@@ -33,7 +33,12 @@ export default function FdaCard() {
     } catch {
       // 探不到就当作「可能缺权限」：引导卡片是安全侧的保守默认，
       // 多显示一张卡片的代价远小于让用户对着空列表猜。
-      setStatus({ userCache: false, systemDirs: false });
+      setStatus({
+        userCache: false,
+        systemDirs: false,
+        homeRedirected: false,
+        flavor: "developer_id",
+      });
     }
   };
 
@@ -53,12 +58,24 @@ export default function FdaCard() {
 
   const granted = () => {
     const s = status();
-    return s !== null && s.userCache && s.systemDirs;
+    return s !== null && s.userCache && s.systemDirs && !s.homeRedirected;
+  };
+
+  /**
+   * 沙箱形态：$HOME 被换到了应用自己的 container，授权无效。
+   *
+   * 这时**不能**给「打开系统设置」按钮 —— 它会让用户去系统设置里折腾
+   * 半天，发现还是 0，然后认定这个 App 骗人。换成说清边界 + 引流完整版。
+   */
+  const sandboxed = () => {
+    const s = status();
+    return s !== null && s.homeRedirected;
   };
 
   const reasonKey = () => {
     const s = status();
     if (!s) return "settings.fda.needBoth";
+    if (s.homeRedirected) return "settings.fda.sandboxed";
     if (!s.userCache && !s.systemDirs) return "settings.fda.needBoth";
     if (!s.userCache) return "settings.fda.needUserCache";
     if (!s.systemDirs) return "settings.fda.needSystem";
@@ -94,7 +111,20 @@ export default function FdaCard() {
             {t(reasonKey())}
           </div>
 
-          <Show when={!granted()}>
+          <Show when={sandboxed() && !granted()}>
+            <div class="mt-3">
+              <a
+                class="btn-primary inline-block"
+                href="https://vgoapp.com"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {t("settings.fda.getFullVersion")}
+              </a>
+            </div>
+          </Show>
+
+          <Show when={!granted() && !sandboxed()}>
             <div class="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"

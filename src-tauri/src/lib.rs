@@ -81,13 +81,30 @@ struct FdaStatus {
     user_cache: bool,
     /// 能不能读 `/Library/*` —— 决定进程枚举等是否可用
     system_dirs: bool,
+    /// `$HOME` 是否被沙箱重定向到了应用自己的 container。
+    ///
+    /// 为 true 时**授权解决不了任何问题**：真实 `~/Library/Caches` 的
+    /// `read_dir` 直接返回 EPERM。前端据此换掉引导，别把用户领去系统设置。
+    home_redirected: bool,
+    /// 构建形态，前端据此决定这张卡片讲什么。
+    flavor: &'static str,
 }
 
 #[tauri::command]
 fn get_fda_status() -> FdaStatus {
+    let real_home = fda::real_home_for_probe();
+    let home = dirs::home_dir();
+    let home_redirected = match (&home, &real_home) {
+        (Some(home), Some(real)) => fda::home_redirected(home, real),
+        // 取不到任何一边时保守判 true：宁可显示「沙箱限制」也不要显示
+        // 「已授权」，后者会让用户对着空列表永远看不到解释。
+        (None, _) | (_, None) => true,
+    };
     FdaStatus {
         user_cache: fda::user_cache_readable(),
         system_dirs: fda::system_dirs_readable(),
+        home_redirected,
+        flavor: flavor::CURRENT.as_str(),
     }
 }
 

@@ -12,11 +12,20 @@
 //!
 //! ## 为什么不能用「读一个已知文件」来判断
 //!
-//! 沙箱对**很多**路径仍然可读（用户目录、文档、下载…），随便挑一个路径探测
-//! 只会得到「有权限」的错误结论。而 `~/Library/Developer`（Xcode）、`/Library/`
-//! 这类系统区域才是真正会被拦的地方。所以探针必须挑**沙箱确实会拦的路径**。
+//! 沙箱对**很多**路径仍然可读（`/Applications`、`/Library/Application Support`…），
+//! 随便挑一个路径探测只会得到「有权限」的错误结论。而真实 home 下的
+//! `~/Library/Caches`、`~/Library/Developer`、`/Library/Caches` 这类才是真正
+//! 会被拦的地方。所以探针必须挑**沙箱确实会拦的路径**。
+//!
+//! ## 第二版修正（2026-09-30）：探针必须拼真实 home
+//!
+//! 上一版用 `dirs::home_dir()`，而沙箱把 `$HOME` 指向应用自己的 container。
+//! 于是探针读到的是 container 里那个空的 Caches：存在、可读、0 条目，
+//! 于是报「已授权」—— 而真实缓存一个字节都读不到。实测 MAS 包里
+//! `~/Library/Caches` 的 `read_dir` 返回 EPERM（被拦），不是空。
+//! 现在探针走 `real_home_for_probe()`，并对「home 被重定向」单独判 false。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 探针路径：受保护的 macOS 目录，非 FDA 下沙箱读不到。
 ///
@@ -30,16 +39,43 @@ const PROBE_DIRS: [&str; 3] = [
     "/Library/Caches",
 ];
 
-/// 用户级探针：`~/Library/Caches` 的父目录是否可列举。
+/// 探针用的**真实** home（passwd 数据库那条），不是 `$HOME`。
 ///
-/// 这一条与前三条不同：它决定**缓存清理**能不能扫到东西。MAS 版实测卡在
-/// 这里，所以单独列出来，前端可以按「哪一类能力被挡」给不同的引导文案。
+/// 沙箱会把 `$HOME` 指向应用自己的 container，而 `dirs::home_dir()` 读的
+/// 就是 `$HOME`。拿它拼用户路径，探到的会是 container 里那个空的 Caches：
+/// 存在、可读、0 条目 → 报「已授权」，而真实缓存一个字节都读不到。
+#[must_use]
+pub fn real_home_for_probe() -> Option<PathBuf> {
+    crate::sandbox_probe::real_home()
+}
+
+/// `$HOME` 是否被沙箱重定向进了自己的 container。
+#[must_use]
+pub fn home_redirected(home: &Path, real_home: &Path) -> bool {
+    crate::sandbox_probe::home_points_at_container(home, real_home)
+}
+
+/// 用户级探针：真实 home 下的 `~/Library/Caches` 能否列举。
 #[must_use]
 pub fn user_cache_readable() -> bool {
-    let Some(home) = dirs::home_dir() else {
+    let Some(real) = real_home_for_probe() else {
         return false;
     };
-    dir_readable(&home.join("Library").join("Caches"))
+    dir_readable(&real.join("Library").join("Caches"))
+}
+
+/// 综合判定。**`home` 被重定向时直接返回 false** —— 哪怕 container 里的
+/// 目录确实可列举。
+///
+/// 这是整条修复的落点：只判「能不能 read_dir」会把「读到了空 container」
+/// 误报成「有权限」，于是卡片显示「全部能力可用」而缓存页是空的。
+/// 用户被告知一切正常、功能却不能用，比明确报错更糟。
+#[must_use]
+pub fn full_disk_access_for(home: &Path, real_home: &Path) -> bool {
+    if home_redirected(home, real_home) {
+        return false;
+    }
+    dir_readable(&real_home.join("Library").join("Caches")) && system_dirs_readable()
 }
 
 /// 系统级探针：没有它则进程枚举、SMART 等一律不可用。
@@ -62,7 +98,11 @@ fn dir_readable(path: &Path) -> bool {
 /// 综合结论。只给前端一个布尔值，具体是哪一类被挡由前端按需再查。
 #[must_use]
 pub fn has_full_disk_access() -> bool {
-    user_cache_readable() && system_dirs_readable()
+    let Some(real) = real_home_for_probe() else {
+        return false;
+    };
+    let home = dirs::home_dir().unwrap_or_else(|| real.clone());
+    full_disk_access_for(&home, &real)
 }
 
 #[cfg(test)]

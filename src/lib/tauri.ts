@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Flavor } from "@/lib/flavor";
 
 export type { UnlistenFn };
 
@@ -429,18 +430,29 @@ export async function getBuildFlavor(): Promise<"developer_id" | "mas"> {
 
 /** 完全磁盘访问权限的探测结果。分两类，因为它们挡住的**能力**不同。 */
 export type FdaStatus = {
-  /** 能不能读 `~/Library/Caches` —— 决定缓存清理是否可用 */
+  /** 能不能读**真实 home**下的 `~/Library/Caches` —— 决定缓存清理是否可用 */
   userCache: boolean;
   /** 能不能读 `/Library/*` —— 决定进程枚举等是否可用 */
   systemDirs: boolean;
+  /**
+   * `$HOME` 是否被沙箱重定向到了应用自己的 container。
+   *
+   * 这一条决定引导该指向哪里：为 true 时**授权解决不了任何问题**
+   * （实测 2026-09-30，MAS 包里真实 `~/Library/Caches` 的 read_dir 直接
+   * EPERM，不是空的），继续显示「打开系统设置」按钮只会把用户领去做一件
+   * 无效的事。
+   */
+  homeRedirected: boolean;
+  /** 构建形态，与 `src/lib/flavor.ts` 的 `Flavor` 一致 */
+  flavor: Flavor;
 };
 
 /**
- * 探测完全磁盘访问权限。
+ * 探测「能不能读到用户数据」。
  *
- * 沙箱下即使带了 `files.all` entitlement，**用户没在系统设置里实际授权时
- * 敏感路径一律读不到** —— 这不是我们独有的限制，CleanMyMac 的 App Store
- * 版要读 SMART 也一样需要用户手动授权。
+ * 注意它现在**不是**单纯的 FDA 探测：后端拼路径用的是 passwd 里的真实
+ * home，而不是 `$HOME` —— 沙箱会把 `$HOME` 指向 container，用它拼出来的
+ * 路径落在那个空目录上，会把「读不到」误报成「已授权」。
  */
 export async function getFdaStatus(): Promise<FdaStatus> {
   return invoke("get_fda_status");

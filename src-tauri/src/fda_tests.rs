@@ -58,3 +58,65 @@ fn has_full_disk_access_agrees_with_its_two_components() {
     let system = super::system_dirs_readable();
     assert_eq!(super::has_full_disk_access(), user && system);
 }
+
+// ===== 真 home，不是 $HOME =====
+//
+// 实测（2026-09-30，MAS 包真机）：App Sandbox 把 `$HOME` 重定向到应用自己的
+// container，而 `dirs::home_dir()` 读的就是 `$HOME`。于是
+// `~/Library/Caches` 探到的是 container 里那个**空的** Caches ——
+// 存在、可读、0 条目，探针报 true，而用户的真实缓存一个字节都读不到。
+//
+// 结果就是：FDA 卡片显示「已授权，全部能力可用」，缓存页却是空的。
+// 用户被告知一切正常，功能却不能用 —— 这是最坏的一种错。
+
+#[test]
+fn the_user_cache_probe_looks_at_the_real_home_not_the_container() {
+    let real = super::real_home_for_probe().expect("passwd 库里必须有 home");
+    assert!(
+        !crate::sandbox_probe::home_points_at_container(&real, &real),
+        "探针用的 home 不该是 container：{}",
+        real.display()
+    );
+    let caches = real.join("Library").join("Caches");
+    assert!(
+        caches.is_dir(),
+        "真实 home 下必须有 Library/Caches，探针路径不对：{}",
+        caches.display()
+    );
+}
+
+#[test]
+fn a_redirected_home_is_reported_as_such_rather_than_as_granted() {
+    // 这是整条修复的落点：被重定向时**不能**报「已授权」。
+    let real = super::real_home_for_probe().expect("有 home");
+    let container = real.join("Library/Containers/com.vgoapp.macslim/Data");
+    assert!(super::home_redirected(&container, &real));
+    assert!(!super::home_redirected(&real, &real));
+}
+
+#[test]
+fn full_disk_access_is_false_when_home_is_redirected_even_if_the_probe_passes() {
+    // 反向断言守住修复本身：container 里的 Data/Library/Caches **确实**
+    // 存在且可列举。若只用「能不能 read_dir」判断，这里会返回 true，
+    // 于是又回到「显示已授权但功能不可用」的状态。
+    let real = super::real_home_for_probe().expect("有 home");
+    let container_home = real.join("Library/Containers/com.vgoapp.macslim/Data");
+    let container_caches = container_home.join("Library/Caches");
+    if dir_readable(&container_caches) {
+        assert!(
+            !super::full_disk_access_for(&container_home, &real),
+            "home 被重定向到 container 时，绝不能报「已授权」"
+        );
+    }
+}
+
+#[test]
+fn an_unredirected_home_keeps_using_the_plain_directory_probe() {
+    // 反过来也要成立：正常的完整版环境下，判定仍然只看目录可不可列举，
+    // 不能因为新增了「重定向」概念就变成永远 false。
+    let real = super::real_home_for_probe().expect("有 home");
+    assert_eq!(
+        super::full_disk_access_for(&real, &real),
+        dir_readable(&real.join("Library/Caches")) && super::system_dirs_readable()
+    );
+}

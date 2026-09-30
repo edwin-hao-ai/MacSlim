@@ -568,6 +568,13 @@ export const en: Dict = {
         "If the button does nothing, open System Settings → Privacy & Security → Full Disk Access manually, drag MacSlim in, and turn it on.",
       openFailed:
         "Could not open System Settings automatically. Go to System Settings → Privacy & Security → Full Disk Access manually.",
+      // App Store build only. Do not mention granting access — it does not
+      // help here. And never label this a "lite/limited" edition: App Store
+      // review guideline 4.0 lists "not enough functionality" as the top
+      // removal reason, and users read a self-applied label as a bait.
+      sandboxed:
+        "The App Store edition runs inside the system sandbox and cannot read your user cache folders. That is a platform limit — granting access does not change it. Process monitoring, system health, app size analysis and uninstall are unaffected.",
+      getFullVersion: "Get the full edition (full cache & developer cache cleaning)",
     },
     general: "General",
     generalDesc: "Behavior toggles",
