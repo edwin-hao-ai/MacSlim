@@ -1,0 +1,220 @@
+use super::*;
+
+// 这组测试对应的产品结论：**Mac App Store 版能不能做进程监控。**
+//
+// 交接文档只记了「进程管理 0 项」，没查原因。查出来的原因是：
+// `sysinfo` 枚举进程走的是 `proc_listallpids`，而那个调用被 App Sandbox
+// 拦掉了 —— 所以 0 项是**依赖交白卷**，不是「沙箱读不到进程」。
+// 实测（2026-09-30，MAS 包真机）：同一进程里 `sysctl(KERN_PROC_ALL)`
+// 能数出 400 个进程。绕开 sysinfo 之后，只读进程监控在 MAS 版是可行的。
+//
+// 终止进程仍然是另一回事：沙箱不允许给别的进程发信号，与能不能**看**
+// 是两回事。所以 MAS 版有「进程监控」但没有「结束进程」，不是自相矛盾。
+
+#[test]
+fn the_snapshot_contains_this_very_process() {
+    // 最硬的非空断言：我们自己一定在列表里，且 pid 必须对得上。
+    // 这条失败意味着整个读取路径根本没通，后面所有数字都不可信。
+    let snapshot = process_snapshot();
+    let me = std::process::id() as i32;
+    let found = snapshot
+        .iter()
+        .find(|p| p.pid == me)
+        .expect("进程快照里必须有自己");
+    assert!(!found.name.is_empty(), "进程名不能为空");
+}
+
+#[test]
+fn the_snapshot_is_not_empty_and_not_a_sane_machine() {
+    let snapshot = process_snapshot();
+    assert!(
+        snapshot.len() > 50,
+        "只枚举出 {} 个进程，明显不对",
+        snapshot.len()
+    );
+}
+
+#[test]
+fn most_listed_pids_carry_a_readable_name() {
+    // 如果结构体布局读错了，`pbi_name` 会是乱码或全空。这条把
+    // 「偏移量对不对」变成一个会失败的断言，而不是让用户看到一屏乱码。
+    let snapshot = process_snapshot();
+    let named = snapshot.iter().filter(|p| !p.name.is_empty()).count();
+    let ratio = named as f64 / snapshot.len() as f64;
+    assert!(
+        ratio > 0.9,
+        "只有 {}/{} 个进程有名字（{:.0}%）—— 结构体布局可能读错了",
+        named,
+        snapshot.len(),
+        ratio * 100.0
+    );
+}
+
+#[test]
+fn resident_memory_is_plausible_for_our_own_process() {
+    let me = std::process::id() as i32;
+    let snapshot = process_snapshot();
+    let found = snapshot.iter().find(|p| p.pid == me).expect("有自己");
+    assert!(
+        found.resident_bytes > 0 && found.resident_bytes < 8 * 1024 * 1024 * 1024,
+        "自己的常驻内存读数离谱：{} 字节",
+        found.resident_bytes
+    );
+}
+
+#[test]
+fn process_names_never_contain_nul_or_control_characters() {
+    // C 字符串数组按 NUL 截断后再转 Rust String 才对。忘了截断就会把
+    // 后面几十个字节的垃圾一起带进 UI。
+    let snapshot = process_snapshot();
+    for sample in &snapshot {
+        assert!(
+            !sample.name.contains('\0'),
+            "进程 {} 的名字里有 NUL",
+            sample.pid
+        );
+        assert!(
+            sample.name.chars().all(|c| !c.is_control() || c == '\t'),
+            "进程 {} 的名字里有控制字符：{:?}",
+            sample.pid,
+            sample.name
+        );
+    }
+}
+
+#[test]
+fn cpu_time_is_reported_in_nanoseconds_and_is_not_absurd() {
+    let me = std::process::id() as i32;
+    let snapshot = process_snapshot();
+    let found = snapshot.iter().find(|p| p.pid == me).expect("有自己");
+    // 单位是纳秒：跑了几分钟的测试进程，CPU 时间应该在毫秒到分钟量级。
+    // 明显超出说明把字节当成了别的单位。
+    assert!(
+        found.cpu_nanos < 60 * 60 * 1_000_000_000,
+        "自己的 CPU 时间 {} 纳秒 = {:.1} 小时，不合理",
+        found.cpu_nanos,
+        found.cpu_nanos as f64 / 3.6e12
+    );
+}
+
+#[test]
+fn taking_two_snapshots_lets_us_derive_cpu_percent() {
+    // 只读监控的核心用法是「两次采样之间的 CPU 增量」。这条确保第二次
+    // 采样确实能拿到同一批进程，且 CPU 时间单调不减 —— 递减就说明读的
+    // 不是累计值，百分比会算出负数。
+    let first = process_snapshot();
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let second = process_snapshot();
+    assert!(!first.is_empty() && !second.is_empty());
+
+    let regressed = second
+        .iter()
+        .filter_map(|after| {
+            let before = first.iter().find(|p| p.pid == after.pid)?;
+            (after.cpu_nanos < before.cpu_nanos).then_some(after.pid)
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+    assert!(
+        regressed.is_empty(),
+        "这些 pid 的累计 CPU 时间反而变小了：{regressed:?} —— \\
+         说明读的不是累计值，算出来的百分比会是负数"
+    );
+}
+
+#[test]
+fn cpu_percent_is_derived_from_the_delta_not_the_absolute() {
+    let base = vec![ProcessSample {
+        pid: 1,
+        ppid: 0,
+        name: "launchd".into(),
+        uid: 0,
+        resident_bytes: 1024,
+        cpu_nanos: 1_000_000_000,
+        thread_count: 1,
+    }];
+    let later = vec![ProcessSample {
+        pid: 1,
+        ppid: 0,
+        name: "launchd".into(),
+        uid: 0,
+        resident_bytes: 1024,
+        // 1 秒 CPU 时间，间隔 2 秒 → 50%
+        cpu_nanos: 2_000_000_000,
+        thread_count: 1,
+    }];
+    let percents = cpu_percent(&base, &later, 2.0);
+    assert!((percents.get(&1).copied().unwrap_or(-1.0) - 50.0).abs() < 0.01);
+}
+
+#[test]
+fn cpu_percent_is_zero_when_nothing_moved() {
+    let same = vec![ProcessSample {
+        pid: 7,
+        ppid: 1,
+        name: "x".into(),
+        uid: 0,
+        resident_bytes: 1,
+        cpu_nanos: 500,
+        thread_count: 1,
+    }];
+    assert_eq!(cpu_percent(&same, &same, 1.0).get(&7).copied(), Some(0.0));
+}
+
+#[test]
+fn cpu_percent_ignores_processes_that_were_not_there_before() {
+    // 新出现的进程没有「上一次」可减，硬减会得到一个巨大的假百分比。
+    let before = Vec::new();
+    let after = vec![ProcessSample {
+        pid: 99,
+        ppid: 1,
+        name: "new".into(),
+        uid: 0,
+        resident_bytes: 1,
+        cpu_nanos: 999_999_999_999,
+        thread_count: 1,
+    }];
+    assert_eq!(
+        cpu_percent(&before, &after, 1.0).get(&99).copied(),
+        Some(0.0)
+    );
+}
+
+#[test]
+fn cpu_percent_never_exceeds_a_hundred() {
+    // 多线程进程在 100% 的定义下最多是「一个核」。超过说明两次采样的
+    // 间隔算错了，或者单位串了。宁可截断也不要显示 4000%。
+    let before = vec![ProcessSample {
+        pid: 5,
+        ppid: 1,
+        name: "busy".into(),
+        uid: 0,
+        resident_bytes: 1,
+        cpu_nanos: 0,
+        thread_count: 8,
+    }];
+    let after = vec![ProcessSample {
+        pid: 5,
+        ppid: 1,
+        name: "busy".into(),
+        uid: 0,
+        resident_bytes: 1,
+        cpu_nanos: 10_000_000_000,
+        thread_count: 8,
+    }];
+    let value = cpu_percent(&before, &after, 1.0);
+    assert!(value[&5] <= 100.0, "单次采样间隔 1 秒却算出 {}%", value[&5]);
+}
+
+#[test]
+fn pids_have_no_duplicates_and_look_like_pids() {
+    // 这条守着 `p_pid` 在 kinfo_proc 里的字节偏移。偏移错了会得到一堆
+    // 离谱的整数（负数、超大数、或同一个值重复几十次），而不是编译错误。
+    let pids = super::list_pids().expect("非沙箱下 sysctl 应当可用");
+    assert!(pids.len() > 50, "只枚举出 {} 个 PID", pids.len());
+    let mut seen = std::collections::HashSet::new();
+    for pid in &pids {
+        assert!(seen.insert(*pid), "PID {pid} 重复出现 —— 偏移很可能错了");
+        assert!(*pid > 0 && *pid < 1_000_000, "PID {pid} 不像真的");
+    }
+}

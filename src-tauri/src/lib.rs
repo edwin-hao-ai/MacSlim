@@ -16,8 +16,10 @@ pub mod operations;
 pub mod ports;
 pub(crate) mod process_ops;
 pub mod process_safety;
+pub mod process_snapshot;
 pub(crate) mod residue_policy;
 pub mod residue_scanner;
+pub mod sandbox_probe;
 pub mod scan_progress;
 pub mod scanner;
 pub mod storage;
@@ -382,6 +384,14 @@ fn setup_app(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 无头沙箱探针：必须在任何 Tauri / 存储初始化之前返回。
+    // 沙箱由内核按签名 entitlement 施加，与从 Finder 还是终端启动无关，
+    // 所以这样跑出来的路径可达性与 GUI 里完全一致。
+    if sandbox_probe::probe_requested(std::env::args().collect()) {
+        sandbox_probe::print_report();
+        return;
+    }
+
     let storage = Arc::new(Storage::open().expect("无法初始化存储"));
 
     // MAS 形态下 updater 插件不注册，`builder` 之后不再被重新赋值，所以这里
