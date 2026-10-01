@@ -181,6 +181,11 @@ def request(method: str, path: str, env: dict, body: dict | None = None) -> dict
         fail(f"{method} {path} 网络失败（已重试 4 次）：{last_error}")
     if response.status_code >= 400:
         fail(f"{method} {path} → HTTP {response.status_code}\n{response.text[:800]}")
+    # 204 / 205 没有正文，硬解 JSON 会抛 JSONDecodeError，把「删除成功」表现成
+    # 一堆无关的 requests 栈 —— 而 DELETE 在这里恰恰是常规操作（清理上传失败
+    # 留下的孤儿资源）。空正文就返回空 dict，与有正文时同样可链式使用。
+    if response.status_code in (204, 205) or not response.content.strip():
+        return {}
     return response.json()
 
 

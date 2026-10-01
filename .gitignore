@@ -67,3 +67,8 @@ target-mas/
 # Python 字节码
 __pycache__/
 *.py[cod]
+
+# scripts/upload_mas_screenshots.py 的本机上传记录（screenshotSet / appScreenshot
+# 的 id）。纯本机状态，且不是幂等的依据 —— 幂等靠向 ASC 查现有集合，所以
+# 提交它只会让不同机器之间互相覆盖无意义的记录。
+state/
