@@ -46,6 +46,12 @@ import { canTerminateProcesses } from "@/lib/flavor";
 type SortKey = "memory" | "cpu" | "name" | "pid" | "uptime";
 type ViewMode = "tree" | "flat";
 
+// 列表网格的两套模板。必须写成**完整类名字面量**：Tailwind 只扫源码里
+// 出现的完整 token，靠 `grid-cols-[${…}]` 拼出来的名字不会被生成，列宽会
+// 整片塌掉 —— 而且这种塌陷在测试里完全看不出来，只在截图上现形。
+const GRID_FULL = "grid-cols-[1fr_72px_72px_64px_56px_96px]";
+const GRID_READONLY = "grid-cols-[1fr_72px_72px_64px_56px]";
+
 type TreeNode = {
   row: ProcessRow;
   children: TreeNode[];
@@ -457,13 +463,19 @@ const ProcessView: Component = () => {
         </button>
       </div>
 
-      <div class="px-6 py-2 grid grid-cols-[1fr_72px_72px_64px_56px_96px] gap-2 text-[11px] font-medium text-zinc-500 border-b border-black/5 dark:border-white/5">
+      <div
+        class={`px-6 py-2 grid gap-2 text-[11px] font-medium text-zinc-500 border-b border-black/5 dark:border-white/5 ${
+          canTerminateProcesses() ? GRID_FULL : GRID_READONLY
+        }`}
+      >
         <SortHeader k="name" label={t("process.columnName")} />
-        <SortHeader k="cpu" label="CPU" class="justify-end" />
+        <SortHeader k="cpu" label="CPU" />
         <SortHeader k="memory" label={t("process.totalMemory")} class="justify-end" />
         <SortHeader k="uptime" label={t("process.columnUptime")} class="justify-end" />
         <SortHeader k="pid" label={t("process.columnPid")} class="justify-end" />
-        <div class="text-right">{t("process.columnAction")}</div>
+        <Show when={canTerminateProcesses()}>
+          <div class="text-right">{t("process.columnAction")}</div>
+        </Show>
       </div>
 
       <div
@@ -507,7 +519,9 @@ const ProcessView: Component = () => {
                   // 零残差）；text-[11px] 行高 15.71px → 需 2.14px，pt-[2px] 残差
                   // 0.14px（亚像素，不可见）。
                   // 结构由 ProcessView.test.tsx 的「所有格子锚在首行基线」用例锁住。
-                  class="px-6 py-1.5 grid grid-cols-[1fr_72px_72px_64px_56px_96px] gap-2 items-start text-sm hover:bg-black/[0.02] dark:hover:bg-white/[0.02] cursor-default group"
+                  class={`px-6 py-1.5 grid gap-2 items-start text-sm hover:bg-black/[0.02] dark:hover:bg-white/[0.02] cursor-default group ${
+                    canTerminateProcesses() ? GRID_FULL : GRID_READONLY
+                  }`}
                   classList={{ "opacity-60": r.protected }}
                 >
                   <div class="min-w-0 flex items-center gap-2">
@@ -654,18 +668,23 @@ const ProcessView: Component = () => {
                   <div class="text-right tabular-nums text-[11px] text-zinc-400 font-mono pt-[2px]">
                     {r.pid}
                   </div>
-                  <div class="flex items-center justify-end gap-1 pt-[2px] opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      type="button"
-                      title={t("scan.whitelistTooltip")}
-                      // 必须传原始名：后端 is_whitelisted 按 proc.name() 比对
-                      // （scanner.rs:289），传展示名会写出永远匹配不上的死条目。
-                      onClick={() => void whitelist(r.full_name || r.name)}
-                      class="p-1 rounded-md text-zinc-400 hover:text-brand-600 hover:bg-brand-500/10"
-                    >
-                      <ShieldCheck size={13} />
-                    </button>
-                  </div>
+                  {/* 白名单的作用是保护进程不被终止。MAS 终止不了任何进程，
+                      所以在这里加白名单等于让用户以为自己在做一件有用的事 ——
+                      实际效果为零。与「操作」列同一条门禁。 */}
+                  <Show when={canTerminateProcesses()}>
+                    <div class="flex items-center justify-end gap-1 pt-[2px] opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        title={t("scan.whitelistTooltip")}
+                        // 必须传原始名：后端 is_whitelisted 按 proc.name() 比对
+                        // （scanner.rs:289），传展示名会写出永远匹配不上的死条目。
+                        onClick={() => void whitelist(r.full_name || r.name)}
+                        class="p-1 rounded-md text-zinc-400 hover:text-brand-600 hover:bg-brand-500/10"
+                      >
+                        <ShieldCheck size={13} />
+                      </button>
+                    </div>
+                  </Show>
                 </div>
               );
             }}

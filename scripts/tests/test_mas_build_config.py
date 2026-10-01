@@ -641,6 +641,49 @@ class MasDeadUiTests(unittest.TestCase):
             "受保护提示必须按能力门禁：MAS 的只读列表里 protected 恒为 false",
         )
 
+    def test_mas_has_no_empty_action_column(self) -> None:
+        """只读列表里不能留一整列空白的「操作」表头。
+
+        这是截屏抓出来的第三处：表头照旧写着「操作」，而列里除了 hover
+        才浮现的白名单按钮之外什么都没有。截图上它就是一列**永远空白**的
+        表头 —— 比留个坏按钮更像「这页坏了」。
+
+        而且那一列里唯一的控件是「加入白名单」，在 MAS 版同样是死功能：
+        白名单的作用是保护进程不被终止，而 MAS 终止不了任何进程。所以表头
+        与整列都要按能力门禁，grid 模板也得跟着少一列，否则表头与数据
+        会错位。
+        """
+        code = strip_tsx_comments(self.sources["ProcessView.tsx"])
+        header_at = code.index("process.columnAction")
+        window = code[max(0, header_at - 400) : header_at + 200]
+        self.assertIn(
+            "canTerminateProcesses()",
+            window,
+            "「操作」表头必须落在 canTerminateProcesses() 门禁内",
+        )
+        self.assertIn(
+            "whitelist(",
+            code,
+            "白名单按钮应当仍在（完整版要用），但必须被同一道门禁包住",
+        )
+        button_at = code.index("whitelist(")
+        button_window = code[max(0, button_at - 600) : button_at]
+        self.assertIn(
+            "canTerminateProcesses()",
+            button_window,
+            "行内白名单按钮必须按能力门禁 —— MAS 终止不了进程，白名单无意义",
+        )
+        # 两套 grid 模板都要以字面量出现：Tailwind 只扫源码里的完整类名，
+        # 靠字符串拼出来的 grid-cols-[...] 不会被生成，列宽会全部塌掉。
+        self.assertIn('"grid-cols-[1fr_72px_72px_64px_56px_96px]"', code)
+        self.assertIn('"grid-cols-[1fr_72px_72px_64px_56px]"', code)
+        # 表头与数据行必须用同一个条件，否则两边列数对不上
+        self.assertGreaterEqual(
+            code.count("canTerminateProcesses() ? GRID_FULL : GRID_READONLY"),
+            2,
+            "表头与数据行都要用同一个能力条件挑 grid 模板",
+        )
+
 
 class MasDockerSectionGateTests(unittest.TestCase):
     """缓存页的 Docker 分区在 MAS 版必须整块藏起来。
