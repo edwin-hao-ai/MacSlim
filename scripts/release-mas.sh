@@ -68,7 +68,17 @@ mkdir -p "$CARGO_TARGET_DIR"
 
 APP="${CARGO_TARGET_DIR}/${TARGET}/release/bundle/macos/MacSlim.app"
 ZIP_DIST="dist/mas"
-PKG_PATH="${ZIP_DIST}/MacSlim-1.0.0-mas.pkg"
+
+# 商店版本（给用户看的那一串）。从 tauri.conf.json 读而不是硬编码：
+# 之前 PKG_PATH 里写死了 1.0.0，版本一改文件名就与产物对不上，而文件名本身
+# 又不影响 ASC（ASC 只看包内的 Info.plist），纯属自己骗自己。
+#
+# 定义必须早于 PKG_PATH 的赋值 —— 那是文件里第一次调用它的地方。
+store_version() {
+  python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])"
+}
+
+PKG_PATH="${ZIP_DIST}/MacSlim-$(store_version)-mas.pkg"
 
 # MAS 凭据里的 API key
 ENV_FILE="${MAS_ASC_ENV:-$HOME/.config/mddock/ios-release.env}"
@@ -251,6 +261,37 @@ sign() {
   echo "  签名完成"
 }
 
+stamp_build_number() {
+  # CFBundleVersion（build 号）必须**每次上传都变大**，而 CFBundleShortVersionString
+  # 是给用户看的商店版本，两者要能独立变化。
+  #
+  # ## 为什么会踩到
+  #
+  # Tauri 只从 tauri.conf.json 的 `version` 生成**两个**键，于是 MAS 包里
+  # CFBundleVersion == CFBundleShortVersionString == 1.0.0。第一次上传成功，
+  # 之后每次都是同一个 build 号，ASC 直接挡回：
+  #
+  #   ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE  (-19232 / -19241)
+  #   The bundle version must be higher than the previously uploaded version: '1.0.0'
+  #
+  # 而 ASC **不会**让同一 build 号覆盖 —— 所以「改了代码想重传」根本做不到，
+  # 必须抬号。这是流程性的坑，不是编译错误，build 全绿也照样撞。
+  #
+  # ## 默认值按日期
+  #
+  # 默认 1.<YYYYMMDD>：每天自动变大（比人工维护一个递增整数可靠得多 ——
+  # 人工递增迟早会忘，忘的那次就是又一次 409），且在数值上确实大于 1.0.0。
+  # 同一天要再传时用 MAS_BUILD_NUMBER 显式指定。
+  local short="$1"
+  local build="${MAS_BUILD_NUMBER:-1.$(date +%Y%m%d)}"
+  local plist="$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" "$plist"
+  local got
+  got="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$plist")"
+  [ "$got" = "$build" ] || fail "CFBundleVersion 写入失败（期望 ${build}，实得 ${got}）"
+  echo "  build 号: ${got}（商店版本仍为 ${short}）"
+}
+
 verify() {
   info "签名自检"
   local out
@@ -277,6 +318,17 @@ verify() {
   [ -f "$APP/Contents/embedded.provisionprofile" ] \
     || fail "缺少 embedded.provisionprofile"
   echo "  provisioning profile: 已就位"
+
+  # build 号必须与商店版本不同：两者相同时第一次能传，之后每次都被 ASC 以
+  # ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE 挡回。在自检里就说清楚，别等到
+  # 传了 20 分钟才看到那条错。
+  local bundle_short bundle_build
+  bundle_short="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")"
+  bundle_build="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist")"
+  echo "  CFBundleShortVersionString=$bundle_short  CFBundleVersion=$bundle_build"
+  if [ "$bundle_short" = "$bundle_build" ]; then
+    fail "CFBundleVersion 与商店版本相同（都是 ${bundle_short}）—— ASC 不允许重复上传同一 build 号"
+  fi
 
   # 体积门槛：App Store 对下载包有上限，超了要等 Apple 批
   local size
@@ -389,8 +441,8 @@ upload() {
 }
 
 case "$MODE" in
-  build)  preflight; build; strip_cli; sanitize_info_plist; install_privacy_manifest; sign; verify; archive ;;
+  build)  preflight; build; strip_cli; sanitize_info_plist; stamp_build_number "$(store_version)"; install_privacy_manifest; sign; verify; archive ;;
   upload) upload ;;
-  all)    preflight; build; strip_cli; sanitize_info_plist; install_privacy_manifest; sign; verify; archive; upload ;;
+  all)    preflight; build; strip_cli; sanitize_info_plist; stamp_build_number "$(store_version)"; install_privacy_manifest; sign; verify; archive; upload ;;
   *)     fail "用法: $0 [build|upload|all]" ;;
 esac

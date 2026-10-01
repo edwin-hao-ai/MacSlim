@@ -1013,6 +1013,71 @@ class MasScreenshotCaptureTimingTests(unittest.TestCase):
         )
 
 
+class MasBuildNumberTests(unittest.TestCase):
+    """CFBundleVersion 必须与商店版本独立，且每次上传变大。
+
+    ## 为什么会踩到
+
+    Tauri 只从 `tauri.conf.json` 的 `version` 生成**两个**键，于是 MAS 包里
+    CFBundleVersion == CFBundleShortVersionString == 1.0.0。第一次上传成功，
+    之后每次都被 ASC 挡回：
+
+        ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE  (-19232 / -19241)
+        The bundle version must be higher than the previously uploaded version: '1.0.0'
+
+    这是流程性的坑，不是编译错误 —— build 全绿、CI 全绿、签名自检全过，
+    只有真的传那一刻才炸，而且是在传了 20 分钟之后。而 ASC **不允许**同一
+    build 号覆盖，所以「改了代码想重传」这件事根本做不到。
+
+    默认值按日期（1.YYYYMMDD）而不是人工递增整数：人工递增迟早会忘，忘的
+    那次就是又一次 409。
+    """
+
+    SCRIPT = ROOT / "scripts/release-mas.sh"
+
+    def setUp(self) -> None:
+        self.source = strip_shell_comments(self.SCRIPT.read_text(encoding="utf-8"))
+
+    def test_it_stamps_a_build_number_distinct_from_the_store_version(self) -> None:
+        self.assertIn(
+            "stamp_build_number",
+            self.source,
+            "必须有一个抬 build 号的步骤",
+        )
+        self.assertIn("Set :CFBundleVersion", self.source)
+        self.assertIn("MAS_BUILD_NUMBER", self.source, "同一天重传时要能显式指定")
+        self.assertIn("date +%Y%m%d", self.source, "默认按日期，保证逐日变大")
+
+    def test_the_self_check_rejects_a_build_number_equal_to_the_store_version(self) -> None:
+        self.assertIn(
+            "CFBundleVersion 与商店版本相同",
+            self.source,
+            "自检里就要拦住，别等传完 20 分钟才看到 ASC 的 409",
+        )
+        self.assertIn("Print :CFBundleVersion", self.source)
+
+    def test_stamping_runs_before_signing(self) -> None:
+        stamp = self.source.index("stamp_build_number \"$(store_version)\"")
+        sign = self.source.index("; sign; verify;")
+        self.assertLess(
+            stamp, sign,
+            "必须在签名前改 Info.plist —— 改在签名之后会破坏签名完整性",
+        )
+
+    def test_the_pkg_name_is_not_hardcoded(self) -> None:
+        """文件名写死版本号，改了版本就与产物对不上。
+
+        而文件名根本不影响 ASC（ASC 只读包内 Info.plist），所以写死它既没好处
+        又会在版本变更后给出误导性的产物名。
+        """
+        self.assertIn('PKG_PATH="${ZIP_DIST}/MacSlim-$(store_version)-mas.pkg"', self.source)
+        self.assertNotIn(
+            'PKG_PATH="${ZIP_DIST}/MacSlim-1.0.0-mas.pkg"',
+            self.source,
+            "pkg 文件名不该写死版本号",
+        )
+
+
 class AscApiHelperTests(unittest.TestCase):
     """ASC 请求助手必须容忍空正文响应。
 
