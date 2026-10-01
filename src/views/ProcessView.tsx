@@ -540,20 +540,25 @@ const ProcessView: Component = () => {
                       </Show>
                     </div>
 
-                    <input
-                      type="checkbox"
-                      checked={selected().has(r.selection_key)}
-                      disabled={r.whitelisted}
-                      onChange={() => toggleSelect(r.selection_key)}
-                      class="w-4 h-4 rounded accent-brand-500 flex-shrink-0 disabled:opacity-40"
-                      title={
-                        r.whitelisted
-                          ? t("process.whitelistLocked")
-                          : r.protected
-                            ? t("process.protectedCheckboxTitle")
-                            : undefined
-                      }
-                    />
+                    {/* 同一处门禁：这份复选框是「排序后的行」用的，
+                        与 ProcessList 里那份是两套实现 —— 只改一处会漏。
+                        留着它的后果和另一处一样：点下去不会有任何结果。 */}
+                    <Show when={canTerminateProcesses()}>
+                      <input
+                        type="checkbox"
+                        checked={selected().has(r.selection_key)}
+                        disabled={r.whitelisted}
+                        onChange={() => toggleSelect(r.selection_key)}
+                        class="w-4 h-4 rounded accent-brand-500 flex-shrink-0 disabled:opacity-40"
+                        title={
+                          r.whitelisted
+                            ? t("process.whitelistLocked")
+                            : r.protected
+                              ? t("process.protectedCheckboxTitle")
+                              : undefined
+                        }
+                      />
+                    </Show>
                     <Show when={r.protected}>
                       <span
                         title={
@@ -711,9 +716,15 @@ const ProcessView: Component = () => {
             </Show>
           </button>
         </Show>
-        <span class="text-xs text-zinc-500">
-          {t("process.protectedHint")}
-        </span>
+        {/* 「受保护进程」的提示只在真的有受保护行时才相关。
+            MAS 版的只读列表里 protected 恒为 false（没有东西需要保护），
+            所以这句提示是纯噪音 —— 而且它出现在列表底部，很容易被
+            误读成一条错误信息。 */}
+        <Show when={canTerminateProcesses()}>
+          <span class="text-xs text-zinc-500">
+            {t("process.protectedHint")}
+          </span>
+        </Show>
         <Show when={error()}>
           <span class="ml-auto text-xs text-danger-600 dark:text-danger-400" role="alert">
             {error()}

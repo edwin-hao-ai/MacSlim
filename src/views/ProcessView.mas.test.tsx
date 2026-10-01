@@ -31,8 +31,10 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 const flavorState = vi.hoisted(() => ({ canTerminate: true }));
 
 vi.mock("@/lib/flavor", () => ({
-  // 组件只读这个能力判断，不读 flavor 本身
+  // 组件只读这两个能力判断，不读 flavor 本身
   canTerminateProcesses: () => flavorState.canTerminate,
+  can: (capability: string) =>
+    capability === "terminateProcess" ? flavorState.canTerminate : true,
 }));
 
 vi.mock("@/i18n", () => ({
@@ -89,7 +91,9 @@ describe("ProcessView 的构建形态收口", () => {
     // 留一个点了必定失败的按钮、再弹「权限不足」，用户会误以为是系统设置问题。
     flavorState.canTerminate = false;
     render(() => <ProcessView />);
-    await screen.findAllByRole("checkbox");
+    // 等进程名而不是等复选框：MAS 下复选框**不该**存在，用它当等待条件
+    // 会让这条测试在修好之后反而超时（实测踩过）。
+    await screen.findByText("sleepy");
     expect(
       screen.queryByRole("button", { name: "process.terminateSelected" }),
     ).toBeNull();
@@ -101,8 +105,26 @@ describe("ProcessView 的构建形态收口", () => {
     // 可用的（走的是只读的进程快照，不是发信号）。
     flavorState.canTerminate = false;
     render(() => <ProcessView />);
-    const boxes = await screen.findAllByRole("checkbox");
-    expect(boxes.length).toBeGreaterThan(0);
-    expect(screen.getByText("process.protectedHint")).toBeTruthy();
+    await screen.findByText("sleepy");
+    expect(screen.getByText("process.masTerminateUnsupported")).toBeTruthy();
+  });
+
+  it("MAS 形态：连选择框都不出现", async () => {
+    // 这一条曾经写成「MAS 仍有复选框」，是错的。
+    //
+    // 复选框的唯一用途是勾选后点「终止」。MAS 版终止不了任何进程，于是
+    // 复选框点下去不会有任何结果 —— 属于「显示了但用不了」那一类问题，
+    // 在 App Store 列表截图里尤其难看（用户看到一堆可勾选的框，
+    // 会以为能杀进程）。
+    flavorState.canTerminate = false;
+    render(() => <ProcessView />);
+    await screen.findByText("sleepy");
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
+  it("Developer ID 形态：复选框照常出现", async () => {
+    flavorState.canTerminate = true;
+    render(() => <ProcessView />);
+    expect((await screen.findAllByRole("checkbox")).length).toBeGreaterThan(0);
   });
 });

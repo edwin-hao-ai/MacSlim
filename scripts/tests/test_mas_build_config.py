@@ -549,3 +549,71 @@ class MasSigningTests(unittest.TestCase):
         )
         self.assertIn("PlistBuddy", body)
         self.assertNotIn("plutil -extract", body)
+
+
+class MasDeadUiTests(unittest.TestCase):
+    """MAS 版不许出现「显示了但用不了」的交互元素。
+
+    这类问题的特征是：**测试全绿、真机截图才看出来**。本轮就靠列表截图
+    抓到两处：
+
+    - 进程列表左侧一整列复选框。它们的唯一用途是勾选后点「终止」，
+      而 MAS 版终止不了任何进程 —— 点下去毫无反应。
+    - 列表底部那句「受保护进程只能强制终止」的提示。MAS 版的只读列表里
+      `protected` 恒为 false（没有东西需要保护），所以它是纯噪音，
+      而且出现在列表底部很容易被误读成一条错误信息。
+
+    更麻烦的是复选框有**两套实现**（`ProcessList.tsx` 一份、
+    `ProcessView.tsx` 排序后的行一份），只改一处会漏。这条门禁就是为了
+    钉住「两处都要门禁」。
+    """
+
+    FILES = {
+        "ProcessList.tsx": ROOT / "src/components/ProcessList.tsx",
+        "ProcessView.tsx": ROOT / "src/views/ProcessView.tsx",
+    }
+
+    def setUp(self) -> None:
+        self.sources = {
+            name: path.read_text(encoding="utf-8") for name, path in self.FILES.items()
+        }
+
+    def test_every_checkbox_is_behind_the_terminate_capability_gate(self) -> None:
+        for name, source in self.sources.items():
+            code = strip_tsx_comments(source)
+            checkboxes = code.count('type="checkbox"')
+            if not checkboxes:
+                continue
+            gates = code.count("canTerminateProcesses()")
+            self.assertGreaterEqual(
+                gates,
+                checkboxes,
+                f"{name} 有 {checkboxes} 个复选框但只有 {gates} 处能力门禁 —— "
+                "MAS 版会露出点不动的选择框",
+            )
+
+    def test_the_protected_hint_is_not_shown_when_nothing_is_protected(self) -> None:
+        code = strip_tsx_comments(self.sources["ProcessView.tsx"])
+        self.assertIn("process.protectedHint", code)
+        # 它必须落在某个 Show/when 的门禁里，而不是无条件渲染
+        self.assertIn(
+            "canTerminateProcesses()",
+            code,
+            "受保护提示必须按能力门禁：MAS 的只读列表里 protected 恒为 false",
+        )
+
+
+def strip_tsx_comments(source: str) -> str:
+    """去掉 TSX 里的行注释与块注释，只留代码。"""
+    import re
+
+    without_blocks = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    out = []
+    for line in without_blocks.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("//"):
+            continue
+        if line.count('"') % 2 == 0 and "//" in line:
+            line = line[: line.index("//")]
+        out.append(line)
+    return "\n".join(out)

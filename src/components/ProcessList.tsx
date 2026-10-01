@@ -2,6 +2,7 @@ import { Component, For, Show } from "solid-js";
 import type { ProcessInfo } from "@/lib/tauri";
 import { ShieldAlert, ShieldCheck } from "lucide-solid";
 import { useI18n } from "@/i18n";
+import { canTerminateProcesses } from "@/lib/flavor";
 
 type Props = {
   processes: ProcessInfo[];
@@ -90,20 +91,27 @@ const ProcessList: Component<Props> = (props) => {
                 class="flex items-center gap-3 py-2 px-1 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] rounded-lg transition-colors"
                 classList={{ "opacity-70": p.protected }}
               >
-                <input
-                  type="checkbox"
-                  checked={props.selected.has(p.selection_key)}
-                  disabled={p.whitelisted}
-                  onChange={() => props.onToggle(p.selection_key)}
-                  class="w-4 h-4 rounded accent-brand-500 disabled:opacity-40"
-                  title={
-                    p.whitelisted
-                      ? t("process.whitelistLocked")
-                      : p.protected
-                        ? t("process.protectedCheckboxTitle")
-                        : undefined
-                  }
-                />
+                {/* 复选框只在**真的能终止**时才渲染。
+                    它的唯一用途是勾选后点「终止」；MAS 版终止不了任何进程，
+                    留着一排点下去毫无反应的框，就是「显示了但用不了」——
+                    而这在 App Store 的列表截图里尤其明显：用户看到可勾选，
+                    就以为能杀进程。 */}
+                <Show when={canTerminateProcesses()}>
+                  <input
+                    type="checkbox"
+                    checked={props.selected.has(p.selection_key)}
+                    disabled={p.whitelisted}
+                    onChange={() => props.onToggle(p.selection_key)}
+                    class="w-4 h-4 rounded accent-brand-500 disabled:opacity-40"
+                    title={
+                      p.whitelisted
+                        ? t("process.whitelistLocked")
+                        : p.protected
+                          ? t("process.protectedCheckboxTitle")
+                          : undefined
+                    }
+                  />
+                </Show>
                 <Show when={p.protected}>
                   <span
                     title={
