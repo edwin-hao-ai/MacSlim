@@ -215,6 +215,63 @@ profile 授权（App Store 下只有这三类是正常的）：
    `DiskSpace / E174.1`）。ASC 会逐条核对实际使用，猜错直接拒审。
    建议跑通后用 `fs_usage` 确认真的调用了那些 API
 
+## 8b. 上传链路（2026-10-01 首次真实上传的实测）
+
+Apple 改了 Mac App Store 的提交格式，这条链路上有四道坎，全是实测撞出来的：
+
+| 错误码 | 含义 | 解法 |
+| --- | --- | --- |
+| 90270 | `ditto` 打的 zip 已不被接受，必须用 Xcode 或 `productbuild` | `xcrun productbuild --component <app> /Applications out.pkg` |
+| 90264 | 产品定义 plist 里的 minimum system version 为 none，必须等于 `LSMinimumSystemVersion` | 由 `productbuild` 自己生成 |
+| 90230 | `product-identifier` / `product-version` 无效 | 同上 |
+| **90886** | **签名里缺 `application-identifier`，而 profile 里有** | 见下 |
+| 90237 | pkg 本身要用 "3rd Party Mac Developer Installer" 证书签名 | 见下 |
+
+### 90886：`codesign --entitlements` 不与 profile 合并
+
+`codesign --entitlements <file>` **只**用你给的那一份，不与 provisioning profile
+合并。Xcode 生成的包能用，是因为它在签名时把 profile 的三项身份字段
+（`application-identifier` / `team-identifier` / `keychain-access-groups`）
+也写进了签名。
+
+缺了它们的后果不是「沙箱失效」，而是 ASC 直接拒收。`release-mas.sh` 现在的
+`sign_entitlements()` 会把两者合并。读 profile 字段要用 `PlistBuddy` ——
+`plutil -extract` 会把 entitlement 名里的点当键路径分隔符，读出来是空。
+
+### 90237：pkg 的 installer 签名
+
+钥匙串里常备的 `Developer ID Installer` **不能**替代，ASC 不认。必须是
+App Store 版，由 `scripts/create_mas_installer_cert.py` 通过 API 签发
+（`MAC_INSTALLER_DISTRIBUTION`）。
+
+三个坑：只导 `.crt` 不导私钥（`find-identity` 里不会出现该身份，而日志显示
+「导入成功」）；`security import` 不能传 `-k`（那是「打开这个 keychain 文件」）；
+要用 `-A` 而不是 `-T`（见下）。
+
+### 尚未解决：productsign 产出空包
+
+`xcrun productsign` 在这台机器上**挂住** —— 静默卡住，被外部超时掐断后留下
+一个 `Bom`/`PackageInfo`/`Payload` 全是 0 字节的半成品，`pkgutil --check-signature`
+报 `invalid signature`。
+
+已排除：换证书类型（用 Application 证书会明确报「需要 installer 身份」，
+说明 installer 身份本身被正确识别）、换输出路径、显式指定 keychain、
+`--timestamp=none`、重启 securityd、清掉重名的重复证书。
+
+最可能的原因是私钥 ACL：`security import -T /usr/bin/productsign` 只把列出的
+程序加进 ACL，其余程序访问私钥仍会弹确认框，而在无 GUI 环境里那个框弹不出来。
+改用 `-A` 重导后仍然失败，所以还有别的原因没定位。
+
+**出路**（按推荐顺序）：
+
+1. 在**图形界面的终端**里手动跑一次 `productsign`（有 GUI 就能弹框确认）：
+   ```bash
+   xcrun productsign --sign "3rd Party Mac Developer Installer: Beijing VGO Co;Ltd (5XNDF727Y6)" \
+     /tmp/comp.pkg dist/mas/MacSlim-1.0.0-mas.pkg
+   ```
+   先用 `xcrun pkgbuild --component <app>.app --install-location /Applications /tmp/comp.pkg` 生成组件包。
+2. 走 Xcode 的 Archive & Export（Apple 推荐的规范路径，能绕过手写签名链）。
+
 ## 9. 下一步（按此顺序）
 
 1. **接 `NSOpenPanel` + 授权 UI**（唯一需要人点一次的环节，底层代码已就位）

@@ -22,9 +22,12 @@
 #      签名弄坏（`code object is not signed at all` / `bundle format unrecognized`）
 #   5. 挂 provisioning profile 并二次签名（App Store 要求 profile 出现在
 #      `Contents/embedded.provisionprofile`）
-#   6. `ditto -c -k --keepParent` 打成 zip（**不能用 zip 命令**，它不保
-#      symlink 与权限位，altool 会报 `The archive is not in the correct format`）
+#   6. `xcrun productbuild --component` 打成自包含 pkg
+#      （**不能**用 ditto 打 zip —— 实测被 ASC 以 90270 拒：Mac App Store
+#      现在只认 productbuild 的产物，理由见 archive() 的注释）
 #   7. `altool --upload-app --type osx`
+#   8. 签名时把 profile 的身份字段合并进 entitlements（少一条就 90886/90230，
+#      理由见 sign_entitlements 的注释）
 #
 # ## 凭据
 #
@@ -46,6 +49,7 @@ TEAM_ID="5XNDF727Y6"
 SIGN_IDENTITY="${MAS_SIGN_IDENTITY:-3rd Party Mac Developer Application: Beijing VGO Co;Ltd (${TEAM_ID})}"
 MAS_KEY="${MAS_KEY:-$HOME/.config/mddock/MacSlim_MAS_key.pem}"
 PROFILE="${MAS_PROFILE:-$HOME/.config/mddock/MacSlim_MAS.mobileprovision}"
+ENTITLEMENTS="${MAS_ENTITLEMENTS:-$ROOT/src-tauri/entitlements.mas.plist}"
 PRIV="${PRIVACY_MANIFEST:-src-tauri/PrivacyInfo.xcprivacy}"
 TARGET="aarch64-apple-darwin"
 
@@ -59,7 +63,7 @@ mkdir -p "$CARGO_TARGET_DIR"
 
 APP="${CARGO_TARGET_DIR}/${TARGET}/release/bundle/macos/MacSlim.app"
 ZIP_DIST="dist/mas"
-ZIP_PATH="${ZIP_DIST}/MacSlim-1.0.0-mas.zip"
+PKG_PATH="${ZIP_DIST}/MacSlim-1.0.0-mas.pkg"
 
 # MAS 凭据里的 API key
 ENV_FILE="${MAS_ASC_ENV:-$HOME/.config/mddock/ios-release.env}"
@@ -148,6 +152,66 @@ install_privacy_manifest() {
   echo "  已复制到 Contents/Resources/"
 }
 
+# 签名用的 entitlements：沙箱权限 + profile 里的身份字段。
+#
+# ## 为什么必须合并，而不是直接用 entitlements.mas.plist
+#
+# `codesign --entitlements <file>` **只**用你给的那一份，不与
+# provisioning profile 合并。而 Xcode 生成的包之所以能用，是因为它在
+# 签名时把 profile 的三项身份字段也写进了签名。
+#
+# 缺了它们的后果不是「沙箱失效」，而是 ASC 直接拒收：
+#   90886 signature ... is missing an application identifier but has an
+#         application identifier in the provisioning profile
+#   90230 Invalid product archive metadata ... product-identifier
+#
+# 这个 warning 之前被 altool 淹没在输出里，而 upload 模式此前**从未跑通**
+# （`local` 之前就引用了未声明的变量），所以没人看到过它。
+sign_entitlements() {
+  local out="${CARGO_TARGET_DIR}/MacSlim-entitlements.plist"
+  local decoded="$CARGO_TARGET_DIR/MacSlim-profile.plist"
+
+  # profile 是 CMS 签名包，先解出明文 plist。
+  security cms -D -i "$PROFILE" > "$decoded" 2>/dev/null || true
+  [ -s "$decoded" ] || fail "无法解出 profile：$PROFILE"
+
+  # entitlement 的名字里带点号（com.apple.developer.team-identifier）。
+  # `plutil -extract` 把点当键路径分隔符，必须转义成 `\.`；PlistBuddy 不按点
+  # 分割，用它更省心。这里用 PlistBuddy，读数组也顺带能拿到。
+  local team app_id
+  team="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.developer.team-identifier" "$decoded")"
+  app_id="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.application-identifier" "$decoded")"
+  [ -n "$team" ] && [ -n "$app_id" ] || fail "profile 里读不到身份字段：$PROFILE"
+
+  # 沙箱权限那份做底，再补上身份字段
+  cp "$ENTITLEMENTS" "$out"
+  local fields=(
+    "com.apple.application-identifier|$app_id"
+    "com.apple.developer.team-identifier|$team"
+  )
+  local entry key value
+  for entry in "${fields[@]}"; do
+    key="${entry%%|*}"
+    value="${entry#*|}"
+    /usr/libexec/PlistBuddy -c "Delete :$key" "$out" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :$key string $value" "$out"
+  done
+
+  # keychain-access-groups 是数组，逐项搬
+  /usr/libexec/PlistBuddy -c "Delete :keychain-access-groups" "$out" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :keychain-access-groups array" "$out"
+  local raw index=1
+  raw="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:keychain-access-groups" "$decoded" \
+    | tr -d '{}' | tr ',' '\n' | sed 's/^ *//;s/ *$//')"
+  for value in $raw; do
+    [ -n "$value" ] || continue
+    /usr/libexec/PlistBuddy -c "Add :keychain-access-groups:-$index string $value" "$out" || true
+    index=$((index + 1))
+  done
+
+  echo "$out"
+}
+
 sign() {
   info "签名（App Store 证书 + 沙箱 entitlements + profile）"
   local identity="$SIGN_IDENTITY"
@@ -156,12 +220,18 @@ sign() {
   # bundle 的哈希固化下来；若先签主程序再签嵌套，主签名立刻失效
   # （`code object is not signed at all in subcomponent`）。
   # 用 --deep 是给 Tauri 这类多可执行文件 bundle 的常规做法，但会丢掉
+  # 签名用的 entitlements 是「沙箱权限 + profile 的身份字段」合并出来的，
+  # 理由见 sign_entitlements 的注释。少那三条 ASC 会拒（90886 / 90230）。
+  local merged
+  merged="$(sign_entitlements)"
+  echo "  合并后的 entitlements：$merged"
+
   # 嵌套各自的 entitlements —— 这里两个可执行文件都不需要额外 entitlement，
   # 所以 --deep 是安全的。
   codesign --force --deep --sign "$identity" \
     --options runtime \
     --timestamp=none \
-    --entitlements src-tauri/entitlements.mas.plist \
+    --entitlements "$merged" \
     "$APP"
 
   # profile 必须出现在 bundle 里（App Store 校验会找它）
@@ -170,7 +240,7 @@ sign() {
   codesign --force --deep --sign "$identity" \
     --options runtime \
     --timestamp=none \
-    --entitlements src-tauri/entitlements.mas.plist \
+    --entitlements "$merged" \
     "$APP"
 
   echo "  签名完成"
@@ -210,26 +280,58 @@ verify() {
 }
 
 archive() {
-  info "打包 zip"
+  # 必须用 productbuild，不能再 ditto 打 zip。
+  #
+  # 实测（2026-10-01 首次真实上传）ditto 出来的 zip 会被 ASC 五条一起拒：
+  #   90270 [SIS] Unsupported toolchain. Packages must be created either
+  #          through Xcode, or using the productbuild tool.
+  #   90230 product-metadata.product-identifier / product-version 无效
+  #   90264 产品定义 plist 里的 minimum system version 为 none，
+  #          必须等于 LSMinimumSystemVersion (13.0)
+  #   90237 包签名无效（90270 的连带结果）
+  #
+  # 根因是 Apple 改了提交格式：Mac App Store 现在只认 productbuild 产出的
+  # 自包含 pkg。`--component` 那一支的说明原文就是
+  # "Build product with a self-contained bundle, e.g. for the Mac App Store"。
   mkdir -p "$ZIP_DIST"
-  rm -f "$ZIP_PATH"
-  # 必须用 ditto 而不是 zip：zip 不保 symlink 与权限位，
-  # altool 会报 "The archive is not in the correct format"
-  ditto -c -k --keepParent "$APP" "$ZIP_PATH"
-  echo "  $ZIP_PATH ($(du -h "$ZIP_PATH" | cut -f1))"
+  rm -f "$PKG_PATH"
+  xcrun productbuild \
+    --component "$APP" \
+    /Applications \
+    "$PKG_PATH" || fail "productbuild 失败"
+  [ -f "$PKG_PATH" ] || fail "productbuild 没产出 $PKG_PATH"
+
+  # pkg 本身还要用 **3rd Party Mac Developer Installer** 证书签一次，
+  # 否则 ASC 拒：90237 The product archive package's signature is invalid.
+  #
+  # 注意不能用钥匙串里常备的 `Developer ID Installer` 替代 —— 那是
+  # Developer ID 分发用的证书，ASC 不认。必须是 App Store 版，由
+  # `scripts/create_mas_installer_cert.py` 通过 API 签发。
+  local installer="${MAS_INSTALLER_IDENTITY:-3rd Party Mac Developer Installer: Beijing VGO Co;Ltd (${TEAM_ID})}"
+  security find-identity -v | grep -Fq "$installer" \
+    || fail "钥匙串里没有 installer 身份：$installer
+  先跑 python3 scripts/create_mas_installer_cert.py"
+  # productsign 会改写目标文件，所以先签到临时名再替换
+  xcrun productsign --sign "$installer" "$PKG_PATH" "$PKG_PATH.signed" \
+    || fail "productsign 失败"
+  mv "$PKG_PATH.signed" "$PKG_PATH"
+  echo "  $PKG_PATH ($(du -h "$PKG_PATH" | cut -f1))，已用 installer 证书签名"
 }
 
 upload() {
   info "上传 App Store Connect"
-  [ -f "$ENV_PATH" ] || :
+  # local 必须**先于**第一次使用。这里原本多了一行在 local 之前就引用
+  # $ENV_PATH 的判断，在 set -u 下直接 `unbound variable` 中止 ——
+  # 于是 upload 模式从来没跑通过，而 build 模式全绿，CI 也就没发现。
   local ENV_PATH="$ENV_FILE"
   [ -f "$ENV_PATH" ] || fail "找不到 ASC 凭据：$ENV_PATH"
   set -a; . "$ENV_PATH"; set +a
   export APPLE_API_KEY_PATH="${APPLE_API_KEY_PATH/#\$HOME/$HOME}"
   export API_PRIVATE_KEYS_DIR="$(dirname "$APPLE_API_KEY_PATH")"
 
+  # 上传的是 pkg 而不是 zip —— 理由见 archive()。
   xcrun altool --upload-app --type osx \
-    --file "$ZIP_PATH" \
+    --file "$PKG_PATH" \
     --apiKey "$APPLE_API_KEY" \
     --apiIssuer "$APPLE_API_ISSUER"
 }

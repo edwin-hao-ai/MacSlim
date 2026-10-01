@@ -32,6 +32,13 @@ def load_json(name: str) -> dict:
     return json.loads((TAURI / name).read_text(encoding="utf-8"))
 
 
+def strip_shell_comments(source: str) -> str:
+    """去掉 shell 里的整行 `#` 注释。"""
+    return "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 def strip_rust_comments(source: str) -> str:
     """去掉 Rust 的行注释与文档注释，只留代码。
 
@@ -479,3 +486,66 @@ class MasProfileAndBookmarkTests(unittest.TestCase):
         # 别再指向 create_mas_credentials.py
         self.assertNotIn("create_mas_credentials.py", self.script)
         self.assertIn("create_mas_profile.py", self.script)
+
+
+class MasSigningTests(unittest.TestCase):
+    """MAS 签名必须自带 profile 的身份字段。
+
+    实测（2026-10-01 首次真实上传）：`codesign --entitlements <file>` **只**用
+    给的那一份，不与 provisioning profile 合并。而 Xcode 生成的包能用，是因为
+    它在签名时把 profile 的三项身份字段也写进了签名。
+
+    缺了它们的后果不是「沙箱失效」，而是 ASC 直接拒收：
+      90886 signature ... is missing an application identifier but has an
+            application identifier in the provisioning profile
+      90230 Invalid product archive metadata ... product-identifier
+
+    这两条被 altool 的输出淹没，而 `upload` 模式此前**从未跑通**
+    （`local` 之前就引用了未声明的变量，`set -u` 下直接中止），所以
+    build 全绿的 CI 从来没发现过。
+    """
+
+    def setUp(self) -> None:
+        self.script = (ROOT / "scripts/release-mas.sh").read_text(encoding="utf-8")
+
+    def test_the_release_script_merges_profile_identity_into_the_signature(self) -> None:
+        self.assertIn("sign_entitlements", self.script)
+        for key in (
+            "com.apple.application-identifier",
+            "com.apple.developer.team-identifier",
+            "keychain-access-groups",
+        ):
+            self.assertIn(key, self.script, f"签名时没有带上 {key}")
+
+    def test_codesign_is_never_pointed_at_the_bare_sandbox_plist(self) -> None:
+        # 直接 `--entitlements src-tauri/entitlements.mas.plist` 就是漏掉
+        # 身份字段的写法，必须指向合并后的那份。
+        self.assertNotIn(
+            '--entitlements src-tauri/entitlements.mas.plist', self.script
+        )
+        self.assertIn('--entitlements "$merged"', self.script)
+
+    def test_upload_declares_its_env_file_before_using_it(self) -> None:
+        # `local` 必须先于第一次使用。之前是反过来的，于是 upload 模式
+        # 一进去就 `unbound variable` 中止 —— 而 build 模式不走这段代码，
+        # 所以 CI 全绿。
+        body = self.script.split("upload() {", 1)[1].split("\n}", 1)[0]
+        local_at = body.index("local ENV_PATH")
+        first_use = body.index('"$ENV_PATH"')
+        self.assertLess(
+            local_at,
+            first_use,
+            "upload() 里 local ENV_PATH 出现在第一次使用它之后",
+        )
+
+    def test_profile_fields_are_read_with_plistbuddy_not_plutil(self) -> None:
+        # entitlement 名里带点号，而 plutil 的 -extract 会把点当键路径分隔符，
+        # 于是读出来是空 → 合并出一份没有身份字段的签名 → 又是 90886。
+        #
+        # 只看代码不看注释：这段的注释里**要**写清「为什么不用 plutil」，
+        # 把注释一起判会让正确的说明反过来把门禁弄挂。
+        body = strip_shell_comments(
+            self.script.split("sign_entitlements() {", 1)[1].split("\n}\n", 1)[0]
+        )
+        self.assertIn("PlistBuddy", body)
+        self.assertNotIn("plutil -extract", body)
