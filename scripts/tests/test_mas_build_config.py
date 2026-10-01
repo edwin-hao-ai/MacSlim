@@ -974,6 +974,44 @@ class MasScreenshotCaptureTimingTests(unittest.TestCase):
         # 上限要有告警，否则「等到天荒地老」和「卡死」看起来一模一样
         self.assertIn("骨架屏", self.source, "超时必须明说可能截到骨架屏")
 
+    def test_partial_capture_keeps_the_original_file_numbering(self) -> None:
+        """补截时编号必须沿用完整列表的位置，不能按子集重排。
+
+        uploader 是按文件名 ASCII 序入位的。只补 cache 一张时若从 01 开始数，
+        它会变成 `01-cache.png` 排到进程图前面 —— 上架页的展示顺序就反了，
+        而且这一切不会有任何报错。
+        """
+        self.assertIn("SHOT_PAGES", self.source, "应支持只截其中几页")
+        self.assertIn(
+            'ALL_PAGES[$i]%%:*}" = "$page"',
+            self.source,
+            "编号应按完整列表里的位置算",
+        )
+        self.assertNotIn(
+            "idx=$((idx + 1))",
+            self.source,
+            "不能用子集自增编号 —— 补截会把顺序排错",
+        )
+
+    def test_the_two_source_patches_must_actually_land(self) -> None:
+        """首屏与语言两处补丁都要校验命中数。
+
+        这两处都是「文本替换式」注入，一旦目标被重构（换个写法、改个名字），
+        替换会静默变成 no-op：截图脚本照样打印「完成」、退出码 0，只是画面
+        全错 —— 最坏情况是把中文图当英文图传上 en-US。宁可当场失败。
+        """
+        self.assertIn("loadStored 大概被重构过", self.source)
+        self.assertIn("App.tsx 大概被重构过", self.source)
+
+    def test_an_unknown_page_name_fails_before_building_anything(self) -> None:
+        self.assertIn("不是已知页面", self.source, "SHOT_PAGES 写错要当场报错")
+        # 校验必须发生在构建循环之前
+        self.assertLess(
+            self.source.index("不是已知页面"),
+            self.source.index('"$ROOT/scripts/release-mas.sh" build'),
+            "页面名校验要早于第一次构建，否则白等好几分钟才报错",
+        )
+
 
 class MasScreenshotUploadContractTests(unittest.TestCase):
     """截图上传脚本必须只建 macOS 的那一个 set，且字段名与 ASC 实测一致。

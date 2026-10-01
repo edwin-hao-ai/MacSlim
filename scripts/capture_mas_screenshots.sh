@@ -58,7 +58,31 @@ REGION="0,0,1440,900"
 # 顺序即 App Store 里的展示顺序，第一张是列表首图。
 # 进程管理放第一：它是唯一一张信息密度足够的画面（进程数 / 内存 / CPU /
 # 按 .app 分组的进程树），而智能扫描页去掉假数据之后画面偏空。
-PAGES=("process:进程管理" "cache:缓存清理" "uninstaller:应用卸载" "scan:智能扫描")
+ALL_PAGES=("process:进程管理" "cache:缓存清理" "uninstaller:应用卸载" "scan:智能扫描")
+# SHOT_PAGES 可以只截其中几页（给页面名即可，默认全截）。
+#
+# 为什么需要：每页都要重新构建一次，实测每页 7-11 分钟（tauri build 会重链
+# Rust 二进制）。只想补一张时重跑全量，等于为一张图付四份钱。名字写错就在
+# 这里当场报错，而不是截出一张莫名其妙的东西。
+SHOT_PAGES="${SHOT_PAGES:-}"
+if [ -z "$SHOT_PAGES" ]; then
+  PAGES=("${ALL_PAGES[@]}")
+else
+  PAGES=()
+  for want in $SHOT_PAGES; do
+    matched=""
+    for entry in "${ALL_PAGES[@]}"; do
+      [ "${entry%%:*}" = "$want" ] && matched="$entry"
+    done
+    [ -n "$matched" ] || {
+      echo "SHOT_PAGES 里的 \"$want\" 不是已知页面。可选：process cache uninstaller scan" >&2
+      exit 2
+    }
+    PAGES+=("$matched")
+  done
+fi
+# 文件名前缀按**完整列表**的下标算，不能按本次子集重排 —— 否则补截出来的
+# 02-cache 会排到第 1 位，把展示顺序搞乱，而 uploader 是按文件名 ASCII 序入位的。
 idx=0
 
 cleanup() {
@@ -188,14 +212,23 @@ page = sys.argv[1]
 p = pathlib.Path("src/App.tsx")
 s = p.read_text(encoding="utf-8")
 import re
-s = re.sub(r'createSignal<ViewId>\("[a-z]+"\)',
-           f'createSignal<ViewId>("{page}")', s, count=1)
+s, n = re.subn(r'createSignal<ViewId>\("[a-z]+"\)',
+               f'createSignal<ViewId>("{page}")', s, count=1)
+if n != 1:
+    raise SystemExit(
+        f"首屏替换命中 {n} 处（需要 1 处）。App.tsx 大概被重构过 —— "
+        "停下来，否则会去截一个不是我们指定的页面。"
+    )
 p.write_text(s, encoding="utf-8")
 PY
   "$ROOT/scripts/release-mas.sh" build >/dev/null 2>&1
   launch_shootable
-  # 文件名用 ASCII 排序，uploader 按顺序入位
-  idx=$((idx + 1))
+  # 序号取自**完整列表**的位置，不是本次子集的次序 —— uploader 按文件名
+  # ASCII 序入位，补截时若重排编号，展示顺序就乱了。
+  idx=0
+  for i in "${!ALL_PAGES[@]}"; do
+    [ "${ALL_PAGES[$i]%%:*}" = "$page" ] && idx=$((i + 1))
+  done
   out="$OUT/$(printf '%02d' "$idx")-$page.png"
   screencapture -x -R "$REGION" -t png "$out"
   size=$(sips -g pixelWidth -g pixelHeight "$out" \
