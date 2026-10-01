@@ -41,6 +41,22 @@ describe("能力门禁：MAS 版不得出现用不了的入口", () => {
     expect(can("appSizeAnalysis")).toBe(true);
   });
 
+  it("MAS 不能清理 Docker 缓存 —— 要 exec `docker` CLI，沙箱做不到", async () => {
+    // 缓存页底部那节「Docker 缓存与资源」。它要跑 `docker system df` 之类
+    // 的外部命令，沙箱里必然拿不到 inventory —— 露出来就是一整块死 UI，
+    // 而且比空页面更糟：它带着「一键清理」按钮。
+    const { can } = await importFlavor();
+    expect(can("dockerCleanup")).toBe(false);
+  });
+
+  it("完整版必须保留 Docker 清理能力 —— 门禁不能把主产品削掉", async () => {
+    const { capabilitiesOf } = (await import("@/lib/flavor")) as unknown as {
+      capabilitiesOf: (f: string) => readonly string[];
+    };
+    expect(capabilitiesOf("developer_id")).toContain("dockerCleanup");
+    expect(capabilitiesOf("mas")).not.toContain("dockerCleanup");
+  });
+
   it("未知能力一律为 false —— 宁可藏起来，也不要露出一个坏入口", async () => {
     const { can } = await importFlavor();
     expect(can("somethingNobodyDefinedYet")).toBe(false);

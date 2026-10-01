@@ -39,6 +39,45 @@ def strip_shell_comments(source: str) -> str:
     )
 
 
+def strip_py_comments(source: str) -> str:
+    """把 Python 的 `#` 注释替换成等长空格，**保持行结构不变**。
+
+    为什么要保行：门禁断言的是整行代码（比如
+    `SCREENSHOT_DISPLAY_TYPE = "APP_DESKTOP"`）。若把 token 逐个 join 起来
+    拼成一行，源码里所有换行都没了，这些断言会全部变成「找不到」——
+    门禁就成了永远红的假信号。
+
+    换成等长空格而不是直接删：删会让后面的行列号全部前移，注释掉的那行
+    也会与下一行粘在一起，破坏后续按行做的解析。
+
+    用 `tokenize` 而不是正则：正则分不清 `#` 在不在字符串里。判据里就
+    含 `"filter[screenshotDisplayType]"`、`"#appStoreScreenshotType"` 这类
+    字面量，正则会把字符串内容当注释吃掉，判据直接错位。
+
+    词法分析失败时断言失败，**不**退回「当作无注释」—— 那会让
+    「注释里没有该词」变成假阳性通过，正是这类门禁要防的事。
+    """
+    import io
+    import tokenize
+
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError) as error:
+        raise AssertionError(f"该 Python 源文件无法词法分析：{error}")
+
+    lines = source.splitlines()
+    for token in tokens:
+        if token.type != tokenize.COMMENT:
+            continue
+        # 单行注释 token 不跨行（跨行的是 NL/NEWLINE），所以只会落在一行里
+        row = token.start[0] - 1
+        lines[row] = (
+            lines[row][: token.start[1]] + " " * (token.end[1] - token.start[1])
+            + lines[row][token.end[1] :]
+        )
+    return "\n".join(lines)
+
+
 def strip_rust_comments(source: str) -> str:
     """去掉 Rust 的行注释与文档注释，只留代码。
 
@@ -603,6 +642,60 @@ class MasDeadUiTests(unittest.TestCase):
         )
 
 
+class MasDockerSectionGateTests(unittest.TestCase):
+    """缓存页的 Docker 分区在 MAS 版必须整块藏起来。
+
+    这是截图抓出来的第三处死 UI，而且**位置最靠下、最容易被漏审**：
+    `DockerSection` 无论 inventory 有没有都渲染一张卡片，沙箱里
+    `docker system df` 跑不通，用户会看到一张永远转圈/永远空的卡片，
+    外加一个点了没反应的「一键清理」。
+
+    前后端必须对齐：后端 `cache_scanner.rs` 已经在
+    `can_exec_external_tools()` 门禁下**不产出** docker 分类，前端再显示
+    这块就纯属自相矛盾。
+    """
+
+    CACHE_VIEW = ROOT / "src/views/CacheView.tsx"
+    FLAVOR = ROOT / "src/lib/flavor.ts"
+    SCANNER = ROOT / "src-tauri/src/cache_scanner.rs"
+
+    def test_the_docker_section_is_not_rendered_unconditionally(self) -> None:
+        code = strip_tsx_comments(self.CACHE_VIEW.read_text(encoding="utf-8"))
+        self.assertIn("DockerSection", code, "缓存页仍应保留完整版的 Docker 分区")
+        self.assertIn(
+            'can("dockerCleanup")',
+            code,
+            "DockerSection 必须落在 can(\"dockerCleanup\") 门禁里 —— "
+            "MAS 版沙箱 exec 不了 docker CLI",
+        )
+        self.assertRegex(
+            code,
+            r'<Show\s+when=\{can\("dockerCleanup"\)\}\s*>\s*<DockerSection',
+            "门禁要包住 <DockerSection> 本身，而不是只在它内部判空",
+        )
+
+    def test_docker_cleanup_is_a_declared_capability_and_mas_lacks_it(self) -> None:
+        flavor = strip_tsx_comments(self.FLAVOR.read_text(encoding="utf-8"))
+        self.assertIn('"dockerCleanup"', flavor)
+        # MAS 的能力表里不能出现它 —— 出现即等于又放出了这块死 UI
+        mas_block = flavor.split("const MAS: readonly Capability[] = [", 1)
+        self.assertEqual(len(mas_block), 2, "flavor.ts 里找不到 MAS 能力表")
+        self.assertNotIn(
+            '"dockerCleanup"',
+            mas_block[1].split("];", 1)[0],
+            "dockerCleanup 不能进 MAS 能力表",
+        )
+
+    def test_the_backend_agrees_that_mas_produces_no_docker_inventory(self) -> None:
+        scanner = strip_rust_comments(self.SCANNER.read_text(encoding="utf-8"))
+        self.assertIn(
+            "can_exec_external_tools",
+            scanner,
+            "后端也必须在 can_exec_external_tools 下跳过 docker 扫描，"
+            "否则会出现「前端藏了、后端还在算」的另一种不一致",
+        )
+
+
 def strip_tsx_comments(source: str) -> str:
     """去掉 TSX 里的行注释与块注释，只留代码。"""
     import re
@@ -688,6 +781,125 @@ class MasWhitelistNoiseTests(unittest.TestCase):
         )
         self.assertIn("protected: false", monitor)
         self.assertIn("protected_reason_key: None", monitor)
+
+
+class FolderGrantPrivacyTruthTests(unittest.TestCase):
+    """隐私政策与 ASC 隐私文本不得谎称 bookmark「退出即失效」。
+
+    ## 这条错在哪
+
+    security-scoped bookmark 的**设计目的就是跨启动持久**：用户在文件选择框
+    点一次授权，之后每次启动都能直接读，不该反复骚扰。原来的文案写成
+    「退出即失效 / valid only while the app runs」，与实现相反，也与
+    应用内文案「授权一次即长期有效」自相矛盾。
+
+    为什么要在意措辞准不准：审核会人工读隐私政策。一条**低估**自己权限
+    的描述，比一条准确的描述更容易被当成误导 —— 尤其它旁边紧跟着
+    「我们不保存、也不上传被授权目录里的任何内容」这种承诺，读起来像是
+    「反正拿到也没用」。真实边界要说清楚：记录持久、读取按需、卸载即消失。
+    """
+
+    SOURCES = {
+        "docs/privacy.html": ROOT / "docs/privacy.html",
+        "scripts/publish_mas_metadata.py": ROOT / "scripts/publish_mas_metadata.py",
+    }
+
+    FORBIDDEN = ("退出即失效", "只在应用运行期间生效", "valid only while the app runs")
+
+    def test_no_source_claims_the_grant_dies_when_the_app_quits(self) -> None:
+        for name, path in self.SOURCES.items():
+            text = path.read_text(encoding="utf-8")
+            for phrase in self.FORBIDDEN:
+                self.assertNotIn(
+                    phrase,
+                    text,
+                    f"{name} 声称授权「{phrase}」，与 bookmark 跨启动持久的事实相反",
+                )
+
+    def test_the_policy_states_the_real_lifetime(self) -> None:
+        html = self.SOURCES["docs/privacy.html"].read_text(encoding="utf-8")
+        self.assertIn("跨启动保留", html, "隐私政策应说明授权记录跨启动保留")
+        metadata = self.SOURCES["scripts/publish_mas_metadata.py"].read_text(encoding="utf-8")
+        self.assertIn("跨启动保留", metadata, "ASC 中文隐私文本应同步")
+        self.assertIn(
+            "persists across launches",
+            metadata,
+            "ASC 英文隐私文本应同步",
+        )
+
+
+class MasScreenshotUploadContractTests(unittest.TestCase):
+    """截图上传脚本必须只建 macOS 的那一个 set，且字段名与 ASC 实测一致。
+
+    ## 为什么钉得这么细
+
+    字段名是**探活 API 试出来的**，不是照文档抄的：Apple 的文档页
+    （`AppScreenshotSetCreateRequest`）在 markdown 渲染里根本不列属性，
+    而按「iOS 老形状」直觉写的两个属性都会被 409 挡回：
+
+        ENTITY_ERROR.ATTRIBUTE.UNKNOWN
+        'appStoreScreenshotType' is not an attribute on the resource
+        'appScreenshotSets'
+
+    `screenshotDisplayType` 才是真名，filter 也叫
+    `filter[screenshotDisplayType]`。这类「文档不告诉你、只能试」的
+    字段最需要门禁钉住 —— 否则改回去要再赔一次 409。
+
+    另一半是**别把 iOS 的形状搬过来**：macOS 只有 APP_DESKTOP 一种展示
+    尺寸。原来交错建 APP_DESKTOP + APP_DETAILS 两个 set，多出来的那套
+    审核根本看不到，却会让 ASC 里出现两套互相矛盾的图。
+    """
+
+    SCRIPT = ROOT / "scripts/upload_mas_screenshots.py"
+
+    def setUp(self) -> None:
+        # 只看代码不看注释：解释「为什么不用 APP_DETAILS」的那段注释里
+        # 必然会出现 APP_DETAILS 这个词，拿它当判据就成了自伤。
+        self.source = strip_py_comments(self.SCRIPT.read_text(encoding="utf-8"))
+
+    def _has(self, needle: str) -> bool:
+        return needle in self.source
+
+    def test_it_uses_the_field_name_asc_actually_accepts(self) -> None:
+        self.assertTrue(
+            self._has('"screenshotDisplayType"'),
+            "appScreenshotSets 的属性名是 screenshotDisplayType（实测）",
+        )
+        self.assertTrue(
+            self._has("filter[screenshotDisplayType]"),
+            "filter 参数名同样是 filter[screenshotDisplayType]",
+        )
+
+    def test_it_never_sends_the_two_fields_asc_rejects(self) -> None:
+        for wrong in ("appStoreScreenshotType", "appStoreScreenshotDisplayType"):
+            self.assertFalse(
+                self._has(f'"{wrong}"'),
+                f"{wrong} 不是 appScreenshotSets 的属性，POST 会吃 409",
+            )
+
+    def test_macos_gets_exactly_one_screenshot_set(self) -> None:
+        self.assertTrue(
+            self._has('SCREENSHOT_DISPLAY_TYPE = "APP_DESKTOP"'),
+            "macOS 只有 APP_DESKTOP 一种展示尺寸",
+        )
+        self.assertFalse(
+            self._has("APP_DETAILS"),
+            "APP_DETAILS 是 iOS 的展示尺寸，macOS 不该出现第二个 set",
+        )
+        self.assertFalse(
+            self._has("SCREENSHOT_SETS"),
+            "单 set 之后不应再有 set 列表与交错分配逻辑",
+        )
+
+    def test_every_shot_goes_into_that_one_set_in_sorted_order(self) -> None:
+        self.assertTrue(
+            self._has('shots = sorted(p for p in directory.glob("*.png"))'),
+            "展示顺序 = 文件名 ASCII 序，截屏脚本靠 01- 04 前缀控制",
+        )
+        self.assertFalse(
+            self._has("[index::"),
+            "不应再有把图交错拆进多个 set 的切片",
+        )
 
 
 class I18nKeyAvailabilityTests(unittest.TestCase):

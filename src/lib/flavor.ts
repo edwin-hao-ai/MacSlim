@@ -83,7 +83,17 @@ export type Capability =
    * 合成一项会让「有能力但没授权」和「有能力且已授权」这两种状态无法区分，
    * 而后者不该再显示授权卡片。
    */
-  | "folderGrant";
+  | "folderGrant"
+  /**
+   * Docker 镜像/容器/卷的清理。
+   *
+   * 必须单独一项而不是并进 cacheClean：Docker 清理的每一步都是
+   * `docker system df` / `docker image prune` 这类**外部 CLI**，沙箱里
+   * 跑不通。后端 `cache_scanner.rs` 早就在 `can_exec_external_tools()`
+   * 下不产出 docker 分类了，前端若不跟着藏，就会出现一块永远空的
+   * 卡片 + 一个点了没反应的「一键清理」—— 比空页面更糟。
+   */
+  | "dockerCleanup";
 
 const DEVELOPER_ID: readonly Capability[] = [
   "processMonitor",
@@ -92,6 +102,7 @@ const DEVELOPER_ID: readonly Capability[] = [
   "cacheClean",
   "appSizeAnalysis",
   "inAppUpdate",
+  "dockerCleanup",
 ];
 
 // MAS 版刻意比完整版少的：
@@ -99,6 +110,7 @@ const DEVELOPER_ID: readonly Capability[] = [
 // - inAppUpdate：MAS 由 App Store 负责更新，updater 插件整块不注册
 // - appGrouping：这一页依赖的按 .app 聚合还没接上（进程监控本身是好的），
 //   放出来就是一个空页面
+// - dockerCleanup：要 exec `docker` CLI，沙箱里拿不到 inventory
 const MAS: readonly Capability[] = [
   "processMonitor",
   "cacheClean",

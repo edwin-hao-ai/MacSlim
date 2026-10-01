@@ -540,7 +540,9 @@ const runScan = async () => {
         </For>
       </Show>
 
-      <DockerSection />
+      <Show when={can("dockerCleanup")}>
+        <DockerSection />
+      </Show>
 
       <div class="flex items-center gap-3 pb-4">
         <button
