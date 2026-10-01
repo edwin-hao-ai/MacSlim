@@ -28,6 +28,8 @@
 #   7. `altool --upload-app --type osx`
 #   8. 签名时把 profile 的身份字段合并进 entitlements（少一条就 90886/90230，
 #      理由见 sign_entitlements 的注释）
+#   9. pkg 用一把**临时钥匙串**里的 installer 私钥签名（用登录钥匙串里那把会
+#      挂死，理由见 sign_pkg_with_installer 的注释）
 #
 # ## 凭据
 #
@@ -50,6 +52,9 @@ SIGN_IDENTITY="${MAS_SIGN_IDENTITY:-3rd Party Mac Developer Application: Beijing
 MAS_KEY="${MAS_KEY:-$HOME/.config/mddock/MacSlim_MAS_key.pem}"
 PROFILE="${MAS_PROFILE:-$HOME/.config/mddock/MacSlim_MAS.mobileprovision}"
 ENTITLEMENTS="${MAS_ENTITLEMENTS:-$ROOT/src-tauri/entitlements.mas.plist}"
+# installer 证书（pkg 自身签名用，由 scripts/create_mas_installer_cert.py 签发）
+INSTALLER_P12="${MAS_INSTALLER_P12:-$HOME/.config/mddock/MacSlim_MAS_installer.p12}"
+INSTALLER_P12_PASSWORD="${MAS_INSTALLER_P12_PASSWORD:-$HOME/.config/mddock/MacSlim_MAS_installer_p12_password.txt}"
 PRIV="${PRIVACY_MANIFEST:-src-tauri/PrivacyInfo.xcprivacy}"
 TARGET="aarch64-apple-darwin"
 
@@ -280,19 +285,7 @@ verify() {
 }
 
 archive() {
-  # 必须用 productbuild，不能再 ditto 打 zip。
-  #
-  # 实测（2026-10-01 首次真实上传）ditto 出来的 zip 会被 ASC 五条一起拒：
-  #   90270 [SIS] Unsupported toolchain. Packages must be created either
-  #          through Xcode, or using the productbuild tool.
-  #   90230 product-metadata.product-identifier / product-version 无效
-  #   90264 产品定义 plist 里的 minimum system version 为 none，
-  #          必须等于 LSMinimumSystemVersion (13.0)
-  #   90237 包签名无效（90270 的连带结果）
-  #
-  # 根因是 Apple 改了提交格式：Mac App Store 现在只认 productbuild 产出的
-  # 自包含 pkg。`--component` 那一支的说明原文就是
-  # "Build product with a self-contained bundle, e.g. for the Mac App Store"。
+  # 格式：必须 productbuild，不能 ditto 打 zip（理由见下）。
   mkdir -p "$ZIP_DIST"
   rm -f "$PKG_PATH"
   xcrun productbuild \
@@ -301,21 +294,80 @@ archive() {
     "$PKG_PATH" || fail "productbuild 失败"
   [ -f "$PKG_PATH" ] || fail "productbuild 没产出 $PKG_PATH"
 
-  # pkg 本身还要用 **3rd Party Mac Developer Installer** 证书签一次，
-  # 否则 ASC 拒：90237 The product archive package's signature is invalid.
-  #
-  # 注意不能用钥匙串里常备的 `Developer ID Installer` 替代 —— 那是
-  # Developer ID 分发用的证书，ASC 不认。必须是 App Store 版，由
-  # `scripts/create_mas_installer_cert.py` 通过 API 签发。
   local installer="${MAS_INSTALLER_IDENTITY:-3rd Party Mac Developer Installer: Beijing VGO Co;Ltd (${TEAM_ID})}"
   security find-identity -v | grep -Fq "$installer" \
     || fail "钥匙串里没有 installer 身份：$installer
   先跑 python3 scripts/create_mas_installer_cert.py"
-  # productsign 会改写目标文件，所以先签到临时名再替换
-  xcrun productsign --sign "$installer" "$PKG_PATH" "$PKG_PATH.signed" \
-    || fail "productsign 失败"
-  mv "$PKG_PATH.signed" "$PKG_PATH"
+
+  sign_pkg_with_installer "$PKG_PATH" "$installer"
   echo "  $PKG_PATH ($(du -h "$PKG_PATH" | cut -f1))，已用 installer 证书签名"
+}
+
+# 拿一把**临时钥匙串**给 productsign 用。
+#
+# ## 为什么不能用登录钥匙串里那把
+#
+# 实测（2026-10-01）：直接用登录钥匙串里的 installer 私钥时，productsign
+# 会**挂死**。用 `sample` 抓到的调用栈是：
+#
+#   SecKeyCreateSignature → SecKeyRunAlgorithmAndCopyResult
+#     → CSSM_SignData → SecurityServer::ClientSession::generateSignature
+#       → mach_msg2_trap        ← 无限等 securityd
+#
+# 被外部超时掐断后留下一个 Bom/PackageInfo/Payload 全是 0 字节的半成品，
+# `pkgutil --check-signature` 报 invalid signature。
+#
+# 换一把我自己知道密码的临时钥匙串（同样的证书与私钥）就立刻签成功。
+# 所以问题出在登录钥匙串里那把私钥的状态，不在 productsign 本身。
+#
+# 顺带避开另一个坑：`security unlock-keychain <path>` 找不到不在搜索列表里的
+# 钥匙串，所以要先 `list-keychains -d user -s` 临时加进去、结束后还原。
+
+BUILD_KEYCHAIN=""
+BUILD_KEYCHAIN_PASSWORD=""
+
+build_signing_keychain() {
+  BUILD_KEYCHAIN="${TMPDIR:-/tmp}/macslim-build.keychain-db"
+  BUILD_KEYCHAIN_PASSWORD="msl$(date +%s)"
+  security delete-keychain "$BUILD_KEYCHAIN" 2>/dev/null || true
+  security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$BUILD_KEYCHAIN" \
+    || fail "无法创建临时钥匙串"
+
+  local original_search
+  original_search="$(security list-keychains -d user | tr -d ' "')"
+  security list-keychains -d user -s "$BUILD_KEYCHAIN" $original_search
+
+  security import "$INSTALLER_P12" -k "$BUILD_KEYCHAIN" \
+    -P "$(cat "$INSTALLER_P12_PASSWORD")" -A || fail "临时钥匙串导入证书失败"
+  security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: \
+    -s -k "$BUILD_KEYCHAIN" "$BUILD_KEYCHAIN_PASSWORD" >/dev/null 2>&1 || true
+}
+
+restore_keychain_search() {
+  [ -n "$BUILD_KEYCHAIN" ] || return 0
+  security list-keychains -d user -s \
+    "$HOME/Library/Keychains/login.keychain-db" "/Library/Keychains/System.keychain"
+  security delete-keychain "$BUILD_KEYCHAIN" 2>/dev/null || true
+}
+
+sign_pkg_with_installer() {
+  local pkg="$1" installer="$2"
+  build_signing_keychain
+  # shellcheck disable=SC2064  # 密码要在这条命令执行的那一刻展开，不是定义时
+  trap "restore_keychain_search" RETURN
+
+  local out="$pkg.signed"
+  rm -f "$out"
+  if ! xcrun productsign --keychain "$BUILD_KEYCHAIN" --sign "$installer" \
+       --timestamp=none "$pkg" "$out"; then
+    fail "productsign 失败"
+  fi
+  # 验签：productsign 失败时会留下一个所有条目都是 0 字节的半成品包，
+  # 而它**不报错** —— 不验这一步就会把损坏的包送上去，然后收到一句
+  # 「signature is invalid」，完全指不到真正原因。
+  pkgutil --check-signature "$out" | grep -Fq "Status: signed" \
+    || fail "productsign 产出的包状态不是 signed（详见注释：失败时不报错，只留空包）"
+  mv "$out" "$pkg"
 }
 
 upload() {
