@@ -349,8 +349,12 @@ const runScan = async () => {
         </Show>
         <div class="relative z-10 flex items-center justify-between gap-6">
           <div class="min-w-0">
-            <h2 class="text-base font-semibold">{t("cache.title")}</h2>
-            <p class="text-xs text-zinc-500 mt-0.5">{t("cache.subtitle")}</p>
+                        <h2 class="text-base font-semibold">
+              {can("dockerCleanup") ? t("cache.title") : t("cache.titleMas")}
+            </h2>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              {can("dockerCleanup") ? t("cache.subtitle") : t("cache.subtitleMas")}
+            </p>
             <Show when={cleaning()}>
               <div class="mt-4 max-w-[420px]">
                 <div class="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-brand-700 dark:text-brand-300">

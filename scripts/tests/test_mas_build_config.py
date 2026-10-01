@@ -902,6 +902,69 @@ class MasScreenshotUploadContractTests(unittest.TestCase):
         )
 
 
+class MasCacheCardCopyTests(unittest.TestCase):
+    """缓存页那张卡的标题/副标题，在 MAS 版不得承诺做不到的事。
+
+    ## 为什么盯两行小字
+
+    截图抓完 Docker 那一节后，副标题还留着「NPM / **Docker** / Xcode /
+    **Homebrew** / Cargo」。隐藏了分区却在标题里继续点名它，是最容易被
+    漏审的一种不一致 —— 审核看的是文字与截图整体，点不点得到分区反而
+    不一定查。而这两行恰恰是这一页最醒目、最会被读到的文案。
+
+    实情是：Docker 要 `docker` CLI + socket，Homebrew 要 `brew`，沙箱里
+    都拿不到；而 npm / Cargo 只是目录，经授权就能读，**可以**列进去。
+    所以 MAS 版该列的是授权清单里真实存在的那六项。
+
+    判据也要求这两个 key 真的被 i18n 覆盖到 —— 用直接字面量 `t("cache.titleMas")`
+    而不是三元里塞变量，否则静态扫描扫不到，门禁就形同虚设。
+    """
+
+    VIEW = ROOT / "src/views/CacheView.tsx"
+
+    def test_the_card_picks_a_flavor_specific_title_and_subtitle(self) -> None:
+        code = strip_tsx_comments(self.VIEW.read_text(encoding="utf-8"))
+        for key in ("cache.titleMas", "cache.subtitleMas"):
+            self.assertIn(f't("{key}")', code, f"{key} 应以字面量形式被调用，才能被 i18n 门禁扫到")
+        self.assertIn(
+            'can("dockerCleanup") ? t("cache.title") : t("cache.titleMas")',
+            code.replace("\n", " ").replace("  ", " "),
+            "标题应按 dockerCleanup 能力二选一，而不是无条件用完整版文案",
+        )
+
+    def test_the_mas_copy_does_not_name_docker_or_homebrew(self) -> None:
+        for name in ("zh-CN.ts", "en.ts"):
+            source = (ROOT / "src/i18n" / name).read_text(encoding="utf-8")
+            for key in ("titleMas", "subtitleMas"):
+                line = _dict_value_line(source, key)
+                self.assertIsNotNone(line, f"{name} 缺少 cache.{key}")
+                for forbidden in ("Docker", "Homebrew"):
+                    self.assertNotIn(
+                        forbidden,
+                        line,
+                        f"{name} 的 cache.{key} 提到了 {forbidden} —— "
+                        "MAS 版沙箱里这两项做不到",
+                    )
+
+    def test_both_dictionaries_still_define_the_mas_copy(self) -> None:
+        for name in ("zh-CN.ts", "en.ts"):
+            keys = _flatten_dict(load_ts_dict(ROOT / "src/i18n" / name))
+            for key in ("cache.titleMas", "cache.subtitleMas"):
+                self.assertIn(key, keys, f"{name} 缺 {key}")
+
+
+def _dict_value_line(source: str, key: str) -> str | None:
+    """取 `key: "..."` 那一行的值部分。
+
+    只取那一行而不是整份词典：断言失败时把几百行 i18n 全 dump 出来，
+    等于用噪声淹没真正的问题。
+    """
+    for line in strip_tsx_comments(source).splitlines():
+        if line.strip().startswith(f"{key}:"):
+            return line
+    return None
+
+
 class I18nKeyAvailabilityTests(unittest.TestCase):
     """组件里 `t("…")` 用到的 key，中英两份词典里都必须能查到。
 

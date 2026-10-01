@@ -400,6 +400,11 @@ export const en: Dict = {
   cache: {
     title: "Developer Caches",
     subtitle: "NPM / Docker / Xcode / Homebrew / Cargo and more",
+    // MAS edition: Docker needs the CLI and Homebrew needs `brew`; neither
+    // is reachable from the sandbox, so naming them here would be a promise
+    // this build cannot keep. These six are exactly what the grant list offers.
+    titleMas: "App & Developer Caches",
+    subtitleMas: "App caches / logs / Xcode / npm / Cargo / Trash",
     scanning: "Scanning caches...",
     freeable: "Reclaimable",
     cleaningStage: "Reclaiming space",

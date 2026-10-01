@@ -360,6 +360,11 @@ export const zhCN = {
   cache: {
     title: "开发者缓存",
     subtitle: "NPM / Docker / Xcode / Homebrew / Cargo 等",
+    // MAS 版专用：Docker 要 exec CLI、Homebrew 要 `brew` 命令，沙箱里都
+    // 做不到，所以这两项不能出现在这句话里 —— 而这句话正是上架截图上
+    // 最醒目的一行。列出的是授权清单里真实存在的六项。
+    titleMas: "应用与开发缓存",
+    subtitleMas: "应用缓存 / 日志 / Xcode / npm / Cargo / 废纸篓",
     scanning: "正在扫描缓存...",
     freeable: "可释放空间",
     cleaningStage: "正在释放空间",
