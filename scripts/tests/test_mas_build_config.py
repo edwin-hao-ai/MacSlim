@@ -658,3 +658,33 @@ class MasFolderGrantI18nTests(unittest.TestCase):
                 self.assertIn(
                     f"{leaf}:", text, f"{dictionary} 里缺 {leaf}（{key}）"
                 )
+
+
+class MasWhitelistNoiseTests(unittest.TestCase):
+    """MAS 版不该给「不建议终止」这类暗示 —— 它没有对应的操作入口。
+
+    实测（抓截屏时）：进程列表第一行下面挂着「命中白名单，默认不建议
+    终止」。那不是「受保护」提示，是**另一套** —— 白名单命中。列表里出现
+    「不建议动某个进程」却又不给任何操作入口，是最难解释的一种界面。
+
+    根因：`snapshot_process_rows` 会用白名单策略覆盖 `process_monitor`
+    设好的 `protected: false`。白名单回答的是「该不该被终止」，而 MAS 版
+    终止不了任何进程，所以整件事没有意义。
+    """
+
+    LIB = TAURI / "src/lib.rs"
+
+    def test_the_mas_flavor_uses_a_policy_that_never_matches(self) -> None:
+        body = strip_rust_comments(self.LIB.read_text(encoding="utf-8"))
+        fn = body.split("fn whitelist_policy", 1)[1].split("\n}", 1)[0]
+        self.assertIn("Flavor::Mas", fn, "whitelist_policy 没有区分 MAS 形态")
+        self.assertIn(
+            "false", fn, "MAS 分支必须返回一个恒为 false 的策略（没有进程该被终止）"
+        )
+
+    def test_the_readonly_rows_are_not_relabelled_as_protected(self) -> None:
+        monitor = strip_rust_comments(
+            (TAURI / "src/process_monitor.rs").read_text(encoding="utf-8")
+        )
+        self.assertIn("protected: false", monitor)
+        self.assertIn("protected_reason_key: None", monitor)

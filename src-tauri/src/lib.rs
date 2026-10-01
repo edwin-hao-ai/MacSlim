@@ -54,8 +54,26 @@ pub struct AppState {
     pub operations: Arc<Mutex<OperationStore>>,
 }
 
-fn whitelist_policy(state: &AppState) -> impl Fn(&str) -> bool + Send + Sync + 'static {
-    process_whitelist_policy(state.storage.clone())
+fn whitelist_policy(state: &AppState) -> Box<dyn Fn(&str) -> bool + Send + Sync + 'static> {
+    // MAS 版一律返回 false，也就是「没有任何进程命中白名单」。
+    //
+    // 白名单回答的是「这个进程该不该被终止」，而 MAS 版终止不了任何进程 ——
+    // 于是这些标记是**纯噪音**，而且很容易被误读：实测抓截屏时，
+    // 第一行进程下面挂着「命中白名单，默认不建议终止」，我第一眼读成了
+    // 「受保护进程」（那是另一套提示），差点以为 MAS 版的安全判定没生效。
+    //
+    // 列表里给用户「这个进程不建议动」的暗示、却又不给任何操作入口，
+    // 是最难解释的一种界面。
+    // `impl Fn` 的返回类型由编译器按第一条 return 推断，所以这里必须让两个
+    // 分支返回**同一种闭包形状** —— 用 Box 包一层而不是提前 return，
+    // 否则先返回的那个闭包会把类型钉死，另一个分支编译不过。
+    let inner = process_whitelist_policy(state.storage.clone());
+    Box::new(move |name: &str| {
+        if matches!(flavor::CURRENT, flavor::Flavor::Mas) {
+            return false;
+        }
+        inner(name)
+    })
 }
 
 /// 下发当前构建形态（见 `flavor` 模块）。
