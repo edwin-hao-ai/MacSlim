@@ -871,6 +871,55 @@ class FolderGrantPrivacyTruthTests(unittest.TestCase):
         )
 
 
+class MasScreenshotCaptureTimingTests(unittest.TestCase):
+    """截屏脚本不得用「一个固定秒数」等所有页面。
+
+    ## 这条门禁来自一次真实翻车
+
+    脚本原先每页一律 `sleep 9`。而各页耗时差两个数量级：进程页枚举
+    260 个进程约 1 秒就绪，应用卸载页要给每个 .app 递归统计体积 ——
+    实测 12 秒仍是骨架屏、30 秒才出列表。于是上架图里混进了一屏**骨架屏**，
+    而「停在加载中」正是审核指南 2.1 里最典型的「不完整」形态。
+
+    这类失败特别阴险：脚本照常打印「完成」、退出码 0、文件名和尺寸全部
+    正常，只有把图打开看才发现。所以必须钉住「不许再回到固定 sleep」。
+    """
+
+    SCRIPT = ROOT / "scripts/capture_mas_screenshots.sh"
+
+    def setUp(self) -> None:
+        self.source = strip_shell_comments(
+            self.SCRIPT.read_text(encoding="utf-8")
+        )
+
+    def test_it_waits_for_the_app_to_go_idle_instead_of_a_fixed_sleep(self) -> None:
+        self.assertIn("wait_until_idle()", self.source, "启动后应等进程空闲")
+        self.assertIn("cpu_time()", self.source, "空闲信号应取自进程 CPU 时间")
+        self.assertIn("IDLE_DELTA", self.source)
+        self.assertIn("MAX_SETTLE", self.source, "要有上限，避免进程异常时空转")
+
+    def test_no_page_is_served_by_a_bare_sleep(self) -> None:
+        body = self.source.split("launch_shootable()", 1)
+        self.assertEqual(len(body), 2, "找不到 launch_shootable")
+        launch = body[1].split("\n}", 1)[0]
+        self.assertNotIn(
+            "sleep 9",
+            launch,
+            "别再回到固定 9 秒 —— 卸载页要 30 秒，它会截到骨架屏",
+        )
+        self.assertNotIn(
+            "screencapture",
+            launch,
+            "等待逻辑应放在 launch_shootable 里，截图前必须已经等过",
+        )
+
+    def test_the_idle_wait_keeps_a_floor_and_reports_a_timeout(self) -> None:
+        # 下限：数据秒回时空闲检测会立刻通过，那时窗口还没稳定
+        self.assertIn("sleep \"$MIN_SETTLE\"", self.source)
+        # 上限要有告警，否则「等到天荒地老」和「卡死」看起来一模一样
+        self.assertIn("骨架屏", self.source, "超时必须明说可能截到骨架屏")
+
+
 class MasScreenshotUploadContractTests(unittest.TestCase):
     """截图上传脚本必须只建 macOS 的那一个 set，且字段名与 ASC 实测一致。
 

@@ -65,7 +65,60 @@ launch_shootable() {
     --entitlements "$ROOT/src-tauri/entitlements.mas.plist" \
     "$SHOT_APP" >/dev/null 2>&1
   open "$SHOT_APP"
-  sleep 9
+  wait_until_idle
+}
+
+# 等 App 真的把数据算完再截，而不是拍一个固定秒数。
+#
+# ## 为什么不能固定 sleep
+#
+# 各页耗时差了两个数量级：进程页枚举 260 个进程约 1 秒，而应用卸载页要给
+# 每个 .app 递归统计体积，本机实测 12 秒时还是骨架屏、30 秒才出列表。原先
+# 一律 `sleep 9`，于是卸载页截到的是**一屏骨架屏** —— 而骨架屏正是审核指南
+# 2.1 里最典型的「不完整」形态，拿它当上架图等于自己交把柄。
+#
+# 拉长成 `sleep 40` 也能糊过去，但那是把一个已知问题用更大的常数盖住：
+# 换台机器、装的东西一多，40 秒照样不够，而且没人会注意到。
+#
+# ## 用什么信号
+#
+# app 的扫描是纯 CPU 的目录遍历，所以「进程累计 CPU 时间不再增长」就等价于
+# 「算完了」。这个信号不需要读窗口，也就不用 AppleScript —— 那会触发系统的
+# 「Developer Tools Access」授权弹窗，正好挡在截图前面。
+#
+# 保留一个下限：窗口弹出与首屏动画本身也要时间，空闲检测会在数据秒回时立刻
+# 通过，那一刻画面还没稳定。
+MIN_SETTLE=5
+MAX_SETTLE=120
+# 连续两次采样之间，允许的 CPU 时间增量（秒）。低于它即视为已空闲。
+IDLE_DELTA=0.30
+
+cpu_time() {
+  # macOS 的 ps TIME 是 [[dd-]hh:]mm:ss.ss，取小数秒部分统一成数字
+  ps -o time= -p "$(pgrep -x macslim | head -1)" 2>/dev/null |
+    awk '{ gsub("-", "", $1); n = split($1, p, ":");
+           s = 0;
+           for (i = 1; i <= n; i++) s = s * 60 + p[i];
+           printf "%.2f\n", s }'
+}
+
+wait_until_idle() {
+  sleep "$MIN_SETTLE"
+  local waited=$MIN_SETTLE
+  local prev curr
+  prev="$(cpu_time)"
+  while [ "$waited" -lt "$MAX_SETTLE" ]; do
+    sleep 2
+    curr="$(cpu_time)"
+    waited=$((waited + 2))
+    # 进程没了（崩了/退出了）就别再等，否则这里会空转到上限
+    [ -z "$curr" ] && return 0
+    if awk "BEGIN{exit !($curr - $prev < $IDLE_DELTA)}"; then
+      return 0
+    fi
+    prev="$curr"
+  done
+  echo "  警告：等待 ${MAX_SETTLE}s 后仍未空闲，截屏可能是骨架屏" >&2
 }
 
 cd "$ROOT"
