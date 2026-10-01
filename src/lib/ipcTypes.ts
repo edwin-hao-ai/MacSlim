@@ -62,9 +62,17 @@ export type ProcessInfo = {
  * `~/Library/Caches` —— 给完全磁盘访问权限也不行。
  */
 export type FolderTarget = {
+  /** 稳定标识，落盘时用它对上号。**snake_case**。 */
   key: string;
   /** 相对真实 home 的路径，仅用于展示「你要授权哪个目录」 */
   relativePath: string;
+  /**
+   * 展示文案的 i18n key，由后端下发。
+   *
+   * 不要从 `key` 拼：`key` 是 snake_case（`user_caches`），而字典里是
+   * camelCase（`userCaches`）。拼错的话界面会把 `access.target.user_caches`
+   * 这样的 key 直接当文案显示出来 —— 实测截图里就是这么发现的。
+   */
   reasonKey: string;
   granted: boolean;
   grantedPath: string | null;

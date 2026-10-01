@@ -1,12 +1,8 @@
 import { createSignal, For, onMount, Show } from "solid-js";
 import { FolderOpen, ShieldCheck, Trash2 } from "lucide-solid";
 import { useI18n } from "@/i18n";
-import {
-  grantFolderAccess,
-  listFolderAccess,
-  revokeFolderAccess,
-  type FolderTarget,
-} from "@/lib/tauri";
+import { grantFolderAccess, listFolderAccess, revokeFolderAccess } from "@/lib/tauri";
+import type { FolderTarget } from "@/lib/ipcTypes";
 
 /**
  * 文件夹访问授权卡片（App Store 版）。
@@ -58,10 +54,12 @@ export default function FolderAccessCard(props: {
     setBusy(target.key);
     setFailed(null);
     try {
-      const granted = await grantFolderAccess(
-        target.key,
-        t(`access.target.${target.key}`),
-      );
+      // 文案 key 用**后端给的** reasonKey，不要从 target.key 拼。
+      // target.key 是 snake_case（`user_caches`，也是落盘时的稳定标识），
+      // 而 i18n 字典里的 key 是 camelCase（`userCaches`）。从前者拼后者
+      // 会得到 `access.target.user_caches` —— 字典里没有，于是界面直接
+      // 把 key 当文案显示出来。实测截图里就是这么发现的。
+      const granted = await grantFolderAccess(target.key, t(target.reasonKey));
       if (granted) {
         await refresh();
         props.onChanged?.();
@@ -113,7 +111,7 @@ export default function FolderAccessCard(props: {
                 >
                   <div class="flex-1 min-w-0">
                     <div class="text-xs font-medium">
-                      {t(`access.target.${target.key}`)}
+                      {t(target.reasonKey)}
                     </div>
                     <div class="text-[11px] text-zinc-500 truncate">
                       {target.granted

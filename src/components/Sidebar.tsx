@@ -11,61 +11,38 @@ import {
 } from "lucide-solid";
 import { useI18n } from "@/i18n";
 import SafeDragSurface from "@/components/shell/SafeDragSurface";
-import {
-  capabilitiesOf,
-  getFlavor,
-  type Capability,
-  type Flavor,
-} from "@/lib/flavor";
+import { visibleNavItems, type ViewId } from "@/lib/navItems";
+import { getFlavor } from "@/lib/flavor";
 
-export type ViewId =
-  | "scan"
-  | "process"
-  | "applications"
-  | "cache"
-  | "uninstaller"
-  | "history"
-  | "settings";
+export type { ViewId } from "@/lib/navItems";
 
 type Props = {
   current: ViewId;
   onChange: (id: ViewId) => void;
 };
 
-type NavItem = {
-  id: ViewId;
-  icon: Component<{ size?: number }>;
-  /** 该页面依赖的能力。缺了就渲染。**硬要求**，不是锦上添花。 */
-  needs?: Capability;
-};
-
-const allItems: NavItem[] = [
-  { id: "scan", icon: Activity },
-  { id: "process", icon: Cpu, needs: "processMonitor" },
-  { id: "applications", icon: Package, needs: "appGrouping" },
-  { id: "cache", icon: HardDrive, needs: "cacheClean" },
-  { id: "uninstaller", icon: Trash2, needs: "appSizeAnalysis" },
-  { id: "history", icon: HistoryIcon },
-  { id: "settings", icon: SettingsIcon },
-];
-
 /**
- * 当前形态下应该出现的导航项。
+ * 导航项 → 图标组件。
  *
- * 没有对应能力的页面，导航过去就是**空页面** —— 那是 App Store 指南 2.1
- * 说的不完整形态，也是审核最容易挑的点。宁可少一个入口，也不要让用户
- * 点进一个什么都没有的地方。
- *
- * 能力清单的唯一真相源在 `@/lib/flavor`，这里只做映射。
+ * 映射放在这里而不是数据层，是因为图标是**渲染**关注点；而「哪些页面该
+ * 出现」是数据关注点，住在 `lib/navItems` 里 —— 那边不 import 图标库，
+ * 所以那条规则可以被秒级测到（实测放在一起时，光 import 就超时 20 秒）。
  */
-export const visibleNavItems = (
-  flavor: Flavor = getFlavor(),
-): { id: ViewId; icon: Component<{ size?: number }> }[] => {
-  const supported = capabilitiesOf(flavor);
-  return allItems.filter(
-    (item) => item.needs === undefined || supported.includes(item.needs),
-  );
-};
+const ICONS = {
+  activity: Activity,
+  cpu: Cpu,
+  package: Package,
+  drive: HardDrive,
+  trash: Trash2,
+  history: HistoryIcon,
+  settings: SettingsIcon,
+} as const;
+
+const items = (): { id: ViewId; icon: Component<{ size?: number }> }[] =>
+  visibleNavItems(getFlavor()).map((spec) => ({
+    id: spec.id,
+    icon: ICONS[spec.icon],
+  }));
 
 const Sidebar: Component<Props> = (props) => {
   // 版本号从 Tauri 运行时读取，避免与 package.json 脱节
@@ -90,7 +67,7 @@ const Sidebar: Component<Props> = (props) => {
           </div>
         </div>
         <nav class="px-2 py-2 flex flex-col gap-0.5">
-          <For each={visibleNavItems()}>
+          <For each={items()}>
             {(item) => (
               <button
                 type="button"

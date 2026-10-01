@@ -617,3 +617,44 @@ def strip_tsx_comments(source: str) -> str:
             line = line[: line.index("//")]
         out.append(line)
     return "\n".join(out)
+
+
+class MasFolderGrantI18nTests(unittest.TestCase):
+    """文件夹授权的文案 key 必须与后端声明的一致。
+
+    实测（2026-10-01 抓截屏时）：授权清单里显示的是
+    `access.target.user_caches` 这种**原始 key** —— 字典里根本没有这一条，
+    于是界面把 key 当文案直接印出来了。
+
+    根因是两边命名不一致：后端的 `target.key` 是 snake_case
+    （`user_caches`，也是落盘时的稳定标识），而 i18n 字典的 key 是
+    camelCase（`userCaches`）。前端从 `key` 拼出 `access.target.user_caches`
+    自然查不到。
+
+    修法是前端改用后端下发的 `reason_key`，并由这里钉住「前端不许从
+    target.key 拼文案 key」。
+    """
+
+    CARD = ROOT / "src/components/FolderAccessCard.tsx"
+
+    def test_the_card_uses_the_reason_key_supplied_by_the_backend(self) -> None:
+        source = strip_tsx_comments(self.CARD.read_text(encoding="utf-8"))
+        self.assertIn("target.reasonKey", source)
+
+    def test_the_card_never_builds_an_i18n_key_out_of_the_target_key(self) -> None:
+        source = strip_tsx_comments(self.CARD.read_text(encoding="utf-8"))
+        self.assertNotIn(
+            "access.target.${", source, "前端仍在从 target.key 拼文案 key —— 会显示原始 key"
+        )
+
+    def test_every_offered_target_has_a_reason_key_that_exists_in_both_dictionaries(self) -> None:
+        rust = (TAURI / "src/folder_access.rs").read_text(encoding="utf-8")
+        declared = set(re.findall(r'reason_key:\s*"([^"]+)"', rust))
+        self.assertGreaterEqual(len(declared), 6, "授权清单少于 6 项，与文案不匹配")
+        for dictionary in ("src/i18n/zh-CN.ts", "src/i18n/en.ts"):
+            text = (ROOT / dictionary).read_text(encoding="utf-8")
+            for key in declared:
+                leaf = key.split(".")[-1]
+                self.assertIn(
+                    f"{leaf}:", text, f"{dictionary} 里缺 {leaf}（{key}）"
+                )

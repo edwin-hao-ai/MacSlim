@@ -78,7 +78,9 @@ async function importFlavor() {
 }
 
 async function importSidebar() {
-  return (await import("@/components/Sidebar")) as unknown as {
+  // 测 `lib/navItems` 而不是 `components/Sidebar`：后者会连带加载整个图标
+  // 库与 Tauri API，实测光 import 就超过 20 秒、直接把测试拖超时。
+  return (await import("@/lib/navItems")) as unknown as {
     visibleNavItems: (f: string) => { id: string }[];
   };
 }
