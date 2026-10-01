@@ -173,9 +173,9 @@ def create_screenshot(env: dict, set_id: str, path: Path) -> tuple[str, dict]:
                     "fileSize": path.stat().st_size,
                     "fileName": path.name,
                 },
-                "relationships": {
-                    "appStoreScreenshotSet": {
-                        "data": {"type": "appStoreScreenshotSets", "id": set_id}
+"relationships": {
+                    "appScreenshotSet": {
+                        "data": {"type": "appScreenshotSets", "id": set_id}
                     }
                 },
             }
@@ -185,9 +185,32 @@ def create_screenshot(env: dict, set_id: str, path: Path) -> tuple[str, dict]:
     operations = attributes.get("uploadOperations") or []
     if not operations:
         fail(f"{path.name} 资源已建但没给上传操作，无法上传")
-    # 把占位的两个字段清成 null，ASC 才认为这次上传是完整的。
-    # 不发这一步资源会一直停在「上传中」。
     screenshot_id = created["data"]["id"]
+    return screenshot_id, {"operations": operations}
+
+
+def commit(env: dict, screenshot_id: str) -> str | None:
+    """把资源标记为「上传完毕」，并回读交付状态。
+
+    ## 这一步不能省
+
+    PUT 全部返回 2xx 之后，资源状态仍然是 `AWAITING_UPLOAD` —— 实测等 45 秒
+    也不变，说明不是异步生效，而是**确实还差一次提交**。不清掉的话，App Store
+    上会留下一排坏掉的截图位。
+
+    ## 属性名又是从 409 里挖出来的
+
+    先试过两种直觉写法，都被挡回：
+
+        ENTITY_ERROR.ATTRIBUTE.NOT_ALLOWED
+        The attribute 'assetToken' can not be included in a 'UPDATE' operation
+
+        ENTITY_ERROR.ATTRIBUTE.INVALID   （空 attributes 的 UPDATE）
+        'Uploaded flag is not set!'  pointer: /data/attributes/uploaded
+
+    真名是 `uploaded`。Apple 的文档 markdown 不列字段，409 的 detail 才是
+    唯一可信来源 —— 所以这里保留「提交后回读状态」，让判据来自服务端。
+    """
     mas.request(
         "PATCH",
         f"/appScreenshots/{screenshot_id}",
@@ -196,32 +219,95 @@ def create_screenshot(env: dict, set_id: str, path: Path) -> tuple[str, dict]:
             "data": {
                 "type": "appScreenshots",
                 "id": screenshot_id,
-                "attributes": {"assetToken": None, "sourceFileChecksum": None},
+                "attributes": {"uploaded": True},
             }
         },
     )
-    return screenshot_id, {"operations": operations}
+    return delivery_state(env, screenshot_id)
+
+
+def delivery_state(env: dict, screenshot_id: str) -> str | None:
+    """回读一张截图的交付状态，用来证明「真的上传完了」。
+
+    没有这一步的话，脚本在 PUT 返回 200 之后就宣布成功 —— 但 PUT 成功只说明
+    字节进了 Apple 的暂存区，不代表资源已被接受。判据要来自服务端。
+
+    状态取值有**两个**都算成功：提交 PATCH 的响应里先是 `UPLOAD_COMPLETE`，
+    稍后再查就变成 `COMPLETE`。只认一个会让脚本在另一种时序下误报失败 ——
+    而误报失败的代价是重跑一次（重跑会往集合里塞重复图）。
+    """
+    try:
+        got = mas.request("GET", f"/appScreenshots/{screenshot_id}", env)
+    except SystemExit:
+        return None
+    raw = got["data"].get("attributes", {}).get("assetDeliveryState")
+    if isinstance(raw, dict):
+        return raw.get("state")
+    return raw
+
+
+DONE_STATES = ("UPLOAD_COMPLETE", "COMPLETE")
+
+
+def normalize_headers(raw) -> dict:
+    """把 `requestHeaders` 的三种历史形态统一成 dict。
+
+    ASC 实测返回的是 **list of dict**：
+
+        "requestHeaders": [ { "name": "Content-Type", "value": "image/png" } ]
+
+    但历史上见过另外两种：直接给 dict，以及给 [[key, value], ...]。三种都收下，
+    遇到不认识的形状就当场报错 —— 静默返回空 dict 会变成「不带 Content-Type
+    上传」，Apple 可能收下却把图当损坏资产，而我们要到看图才发现。
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    headers = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and "name" in item:
+                headers[item["name"]] = item.get("value")
+            elif isinstance(item, (list, tuple)) and len(item) == 2:
+                headers[item[0]] = item[1]
+            else:
+                fail(f"看不懂的 requestHeaders 形状：{item!r}")
+        return headers
+    return fail(f"看不懂的 requestHeaders 类型：{type(raw).__name__}")
 
 
 def put_operations(operations: list, path: Path) -> str:
     """按上传指令逐条 PUT 二进制。"""
     payload_bytes = path.read_bytes()
     for operation in operations:
-        headers = operation.get("requestHeaders") or {}
-        if isinstance(headers, list):
-            # 历史上 ASC 有时返回 [[key, value], ...] 的形式
-            headers = {pair[0]: pair[1] for pair in headers}
+        headers = normalize_headers(operation.get("requestHeaders"))
+        offset = operation.get("offset") or 0
+        length = operation.get("length")
+        chunk = (
+            payload_bytes
+            if length is None
+            else payload_bytes[offset : offset + length]
+        )
         status = _raw(
-            operation.get("method", "PUT"), operation["url"], headers, payload_bytes
+            operation.get("method", "PUT"), operation["url"], headers, chunk
         )
         if status not in (200, 201, 204):
             fail(f"{path.name} 上传失败：HTTP {status}")
     return "、".join(o.get("method", "PUT") for o in operations)
 
 
-def upload(env: dict, set_id: str, path: Path) -> None:
-    _, plan = create_screenshot(env, set_id, path)
-    print(f"  已上传 {path.name}（{put_operations(plan['operations'], path)}）")
+def upload(env: dict, set_id: str, path: Path) -> str:
+    screenshot_id, plan = create_screenshot(env, set_id, path)
+    methods = put_operations(plan["operations"], path)
+    state = commit(env, screenshot_id)
+    if state not in DONE_STATES:
+        fail(
+            f"{path.name} 已提交但交付状态是 {state or '未知'}，"
+            "这张图不会被 App Store 采用"
+        )
+    print(f"  已上传 {path.name}（{methods}）交付状态={state}")
+    return screenshot_id
 
 
 def _raw(method: str, url: str, headers: dict, body: bytes) -> int:
@@ -273,13 +359,15 @@ def main() -> None:
     print(f"\n[{SCREENSHOT_DISPLAY_TYPE}] {len(shots)} 张")
     set_id = ensure_set(env, localization_id, SCREENSHOT_DISPLAY_TYPE)
     uploaded: list[str] = []
+    ids: list[str] = []
     for shot in shots:
-        upload(env, set_id, shot)
+        ids.append(upload(env, set_id, shot))
         uploaded.append(shot.name)
 
     state[args.locale] = {
         "set": set_id,
         "screenshots": uploaded,
+        "ids": ids,
     }
     save_state(state)
     print(f"\n完成，set {set_id} 共 {len(uploaded)} 张。")

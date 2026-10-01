@@ -1013,6 +1013,34 @@ class MasScreenshotCaptureTimingTests(unittest.TestCase):
         )
 
 
+class AscApiHelperTests(unittest.TestCase):
+    """ASC 请求助手必须容忍空正文响应。
+
+    ## 为什么
+
+    ASC 的 DELETE 返回 204 无正文，硬解 JSON 会把成功表现成崩溃。踩过：
+    清理上传失败留下的孤儿截图时，DELETE 明明成功（204），却抛
+    `JSONDecodeError: Expecting value: line 1 column 1` —— 一堆 requests 的
+    栈，完全看不出「删除其实成功了」，反而像凭据坏了。
+
+    这不是边角情况：DELETE 在这套脚本里是常规操作（孤儿资源清理、重建
+    资源），所以凡是成功路径都会撞上。
+    """
+
+    def test_it_survives_an_empty_response_body(self) -> None:
+        source = (ROOT / "scripts/create_mas_profile.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "response.status_code in (204, 205)",
+            source,
+            "空正文响应必须短路返回，不能交给 response.json()",
+        )
+        self.assertIn(
+            "not response.content.strip()",
+            source,
+            "除状态码外也应按正文是否为空兜底 —— 有的端点回 200 空正文",
+        )
+
+
 class MasScreenshotUploadContractTests(unittest.TestCase):
     """截图上传脚本必须只建 macOS 的那一个 set，且字段名与 ASC 实测一致。
 
@@ -1055,12 +1083,32 @@ class MasScreenshotUploadContractTests(unittest.TestCase):
             "filter 参数名同样是 filter[screenshotDisplayType]",
         )
 
-    def test_it_never_sends_the_two_fields_asc_rejects(self) -> None:
+    def test_never_sends_the_two_fields_asc_rejects(self) -> None:
         for wrong in ("appStoreScreenshotType", "appStoreScreenshotDisplayType"):
             self.assertFalse(
                 self._has(f'"{wrong}"'),
                 f"{wrong} 不是 appScreenshotSets 的属性，POST 会吃 409",
             )
+
+    def test_the_screenshot_points_at_its_set_by_the_right_relationship(self) -> None:
+        """relationship 叫 `appScreenshotSet`，不叫 `appStoreScreenshotSet`。
+
+        和上面的属性名是同一类坑：文档 markdown 不列字段，只能靠 409 的
+        detail 反推，而它这次把两个错一起说了：
+
+            ENTITY_ERROR.RELATIONSHIP.UNKNOWN
+            'appStoreScreenshotSet' is not a relationship on 'appScreenshots'
+            ENTITY_ERROR.RELATIONSHIP.REQUIRED
+            You must provide a value for the relationship 'appScreenshotSet'
+        """
+        self.assertTrue(
+            self._has('"appScreenshotSet"'),
+            "relationship 名应为 appScreenshotSet",
+        )
+        self.assertFalse(
+            self._has('"appStoreScreenshotSet"'),
+            "appStoreScreenshotSet 不是 appScreenshots 的 relationship，POST 会吃 409",
+        )
 
     def test_macos_gets_exactly_one_screenshot_set(self) -> None:
         self.assertTrue(
@@ -1076,14 +1124,76 @@ class MasScreenshotUploadContractTests(unittest.TestCase):
             "单 set 之后不应再有 set 列表与交错分配逻辑",
         )
 
+    def test_it_commits_with_the_uploaded_flag_and_verifies_delivery_state(self) -> None:
+        """必须发 `uploaded: true` 的提交，且提交后回读交付状态。
+
+        ## 为什么这一步不能省
+
+        PUT 全部返回 2xx 之后，资源状态仍是 `AWAITING_UPLOAD` —— 实测等 45 秒
+        也不变，所以不是异步生效，而是**确实差一次提交**。不清掉，App Store
+        上会留下一排坏掉的截图位，而本地一切看起来都正常。
+
+        ## 属性名是从 409 里挖出来的
+
+        两种直觉写法都被挡回：
+
+            ENTITY_ERROR.ATTRIBUTE.NOT_ALLOWED
+            The attribute 'assetToken' can not be included in a 'UPDATE' operation
+
+            ENTITY_ERROR.ATTRIBUTE.INVALID   （发空 attributes 的 UPDATE）
+            'Uploaded flag is not set!'   pointer: /data/attributes/uploaded
+        """
+        self.assertTrue(
+            self._has('"uploaded": True'),
+            "提交属性是 uploaded: true（字段名来自 409，不是文档）",
+        )
+        self.assertFalse(
+            self._has('"assetToken"'),
+            "assetToken 不允许出现在 UPDATE 里",
+        )
+        self.assertTrue(
+            self._has("UPLOAD_COMPLETE"),
+            "提交后必须校验交付状态到达 UPLOAD_COMPLETE / COMPLETE",
+        )
+        self.assertTrue(
+            self._has('"COMPLETE"'),
+            "COMPLETE 也是成功态：提交响应里是 UPLOAD_COMPLETE，稍后再查变 COMPLETE，"
+            "只认一个会在另一种时序下误报失败 —— 而误报失败会诱发重跑、重跑塞重复图",
+        )
+        self.assertTrue(
+            self._has("assetDeliveryState"),
+            "完成与否应读服务端状态，而不是自己宣布成功",
+        )
+
     def test_every_shot_goes_into_that_one_set_in_sorted_order(self) -> None:
         self.assertTrue(
             self._has('shots = sorted(p for p in directory.glob("*.png"))'),
-            "展示顺序 = 文件名 ASCII 序，截屏脚本靠 01- 04 前缀控制",
+            "展示顺序 = 文件名 ASCII 序，截屏脚本靠 01-04 前缀控制",
         )
         self.assertFalse(
             self._has("[index::"),
             "不应再有把图交错拆进多个 set 的切片",
+        )
+
+    def test_it_sends_no_commit_patch_but_reads_back_the_delivery_state(self) -> None:
+        """不许发那个 commit PATCH，但必须回读交付状态。
+
+        把 assetToken / sourceFileChecksum 清成 null 的 PATCH 会被 ASC 挡回：
+
+            ENTITY_ERROR.ATTRIBUTE.NOT_ALLOWED
+            The attribute 'assetToken' can not be included in a 'UPDATE' operation
+
+        而去掉它之后，脚本唯一的「成功」依据就只剩 PUT 返回 200 —— 那只说明
+        字节进了 Apple 的暂存区。所以必须回读 assetDeliveryState，让判据来自
+        服务端而不是来自我们自己。
+        """
+        self.assertFalse(
+            self._has('"assetToken"'),
+            "assetToken 不允许出现在 UPDATE 里，这一步只会吃 409",
+        )
+        self.assertTrue(
+            self._has("assetDeliveryState"),
+            "上传后应回读服务端交付状态，而不是自己宣布成功",
         )
 
 
