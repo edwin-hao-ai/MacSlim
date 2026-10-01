@@ -601,7 +601,11 @@ const runScan = async () => {
         {/* prepare 期间用说明文字换掉「不可撤销」提示，而不是在按钮旁边另加一条：
             这一行总宽只有 ~700px，额外插入文案会把「重新扫描」和提示都挤到换行
             （实测过一次，很难看）。两者都是同一位置的辅助说明，互斥显示即可。 */}
-        <span class="ml-auto text-[11px] text-zinc-400 whitespace-nowrap">
+        {/* 不能用 whitespace-nowrap：中文「此操作不可撤销，请确认后执行」够短，
+            英文 "This action cannot be undone, confirm before proceeding" 够长 ——
+            nowrap 会让它撑出容器右沿被**裁掉**（实测英文截图里最后几个字母没了）。
+            允许换行 + 右对齐，两种语言都不会溢出。 */}
+        <span class="ml-auto text-[11px] text-zinc-400 text-right">
           {preparing() ? t("cache.preparingHint") : t("common.notice_irreversible")}
         </span>
       </div>

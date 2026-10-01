@@ -871,6 +871,61 @@ class FolderGrantPrivacyTruthTests(unittest.TestCase):
         )
 
 
+class LongCopyLayoutTests(unittest.TestCase):
+    """不得对会随语言变长的文案使用 `whitespace-nowrap`。
+
+    ## 为什么需要
+
+    出英文截屏时才暴露：缓存页右下角那句「此操作不可撤销，请确认后执行」
+    在中文下够短，加了 `whitespace-nowrap` 也没事；英文是
+    "This action cannot be undone, confirm before proceeding"，nowrap 让它撑出
+    容器右沿，被**裁掉**了最后几个字母。
+
+    这类问题中文界面永远看不见、测试也不会红（没有像素断言），只有把英文
+    版截屏打开看才发现。所以对「两种语言长度差别大」的文案直接禁掉 nowrap，
+    改成允许换行 + 右对齐。
+
+    判据只针对这一句：给全局加「禁止 nowrap」会误伤表格里该单行显示的短
+    标签（`总内存`、`PID`），那属于矫枉过正。
+    """
+
+    VIEW = ROOT / "src/views/CacheView.tsx"
+
+    def test_the_irreversible_notice_may_wrap(self) -> None:
+        code = strip_tsx_comments(self.VIEW.read_text(encoding="utf-8"))
+        anchor = code.index("common.notice_irreversible")
+        window = code[max(0, anchor - 500) : anchor]
+        self.assertNotIn(
+            "whitespace-nowrap",
+            window,
+            "不可撤销提示不得 nowrap：英文长度约为中文两倍，会被裁掉",
+        )
+        self.assertIn(
+            "text-right",
+            window,
+            "改成允许换行后要右对齐，否则换行后左沿会参差不齐",
+        )
+
+    def test_the_english_notice_really_is_much_longer(self) -> None:
+        # 钉住「英文更长」这个前提：哪天有人把英文文案改短了、或者两边
+        # 换过来，这条门禁的前提就该重新评估而不是继续盲守。
+        zh = _dict_value_line(
+            (ROOT / "src/i18n/zh-CN.ts").read_text(encoding="utf-8"),
+            "notice_irreversible",
+        )
+        en = _dict_value_line(
+            (ROOT / "src/i18n/en.ts").read_text(encoding="utf-8"),
+            "notice_irreversible",
+        )
+        self.assertIsNotNone(zh)
+        self.assertIsNotNone(en)
+        self.assertGreater(
+            len(en),
+            len(zh),
+            "英文提示理应明显长于中文；若不再如此，说明 nowrap 的风险前提变了",
+        )
+
+
 class MasScreenshotCaptureTimingTests(unittest.TestCase):
     """截屏脚本不得用「一个固定秒数」等所有页面。
 

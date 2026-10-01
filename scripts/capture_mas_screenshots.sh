@@ -26,6 +26,25 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:?用法: capture_mas_screenshots.sh <输出目录>}"
+# zh-CN | en。默认中文。
+#
+# ## 为什么需要这个开关
+#
+# 上架页要按语言分别给图：en-US 那条 listing 的副标题是英文的，配一屏中文
+# 截图会很显眼。而截屏只能靠「改源码 → 重新构建 → 还原」逐页切过去，没法
+# 在运行时点设置页改语言（不用 AppleScript 的理由见文件末尾）。
+#
+# 这里改的是**默认值**（loadStored 原本回落到 "auto"，即跟随系统语言），
+# 不是改任何一条文案 —— 画面上的每个英文串都仍然来自 src/i18n/en.ts 本身，
+# 所以截图如实反映一个英文用户看到的东西。
+SHOT_LOCALE="${SHOT_LOCALE:-zh-CN}"
+case "$SHOT_LOCALE" in
+  zh-CN | en) ;;
+  *)
+    echo "SHOT_LOCALE 只接受 zh-CN 或 en，收到的是：$SHOT_LOCALE" >&2
+    exit 2
+    ;;
+esac
 SRC="${MAS_APP:-$HOME/.cargo/shared-target-mas/aarch64-apple-darwin/release/bundle/macos/MacSlim.app}"
 SHOT_APP="${TMPDIR:-/tmp}/MacSlimShot.app"
 # 与 App Store 认可的尺寸对应：1280x800 点 = 2560x1600 像素
@@ -44,7 +63,7 @@ idx=0
 
 cleanup() {
   cd "$ROOT"
-  git checkout -- src/App.tsx src-tauri/tauri.conf.json 2>/dev/null || true
+  git checkout -- src/App.tsx src-tauri/tauri.conf.json src/i18n/index.tsx 2>/dev/null || true
   pkill -x macslim 2>/dev/null || true
   rm -rf "$SHOT_APP"
 }
@@ -128,6 +147,37 @@ cd "$ROOT"
 # 壁纸 —— 窗口居中的位置是估出来的，屏幕尺寸一变就偏。改成全屏就没有对齐
 # 问题可出了。
 python3 scripts/_set_shot_window_size.py fullscreen
+
+# 语言补丁：必须在每页循环**之前**打一次，且要同时盖掉两条出口。
+#
+# ## 为什么不能只改默认值
+#
+# loadStored() 有两条 return：一条是 localStorage 命中时 `return v`，一条是
+# 兜底的 `return "auto"`。而截屏副本与真包 **bundle id 相同**，WebKit 的
+# localStorage 因此跨次运行残留 —— 上一轮中文截图写进去的 "zh-CN" 会把
+# 只改兜底值的补丁整个盖掉，然后我们就会把一屏中文当成英文图传上 en-US。
+#
+# 所以两条出口都要强制成目标语言。而且**补丁必须校验命中数**：哪天有人
+# 重构了 loadStored，替换数不对就得当场失败，绝不能静默出一屏错语言的图。
+echo "语言：$SHOT_LOCALE"
+python3 - "$SHOT_LOCALE" <<'PY'
+import pathlib, re, sys
+
+want = sys.argv[1]
+path = pathlib.Path("src/i18n/index.tsx")
+source = path.read_text(encoding="utf-8")
+
+patched, hit_v, hit_auto = source, 0, 0
+patched, hit_v = re.subn(r'return v;', f'return "{want}";', patched, count=1)
+patched, hit_auto = re.subn(r'return "auto";', f'return "{want}";', patched, count=1)
+
+if not (hit_v == 1 and hit_auto == 1):
+    raise SystemExit(
+        f"i18n 语言补丁只命中 {hit_v}/{hit_auto} 处（需要各 1 处）。"
+        "loadStored 大概被重构过 —— 停下来，别把错语言的图传上去。"
+    )
+path.write_text(patched, encoding="utf-8")
+PY
 
 for entry in "${PAGES[@]}"; do
   page="${entry%%:*}"
