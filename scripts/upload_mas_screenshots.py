@@ -59,12 +59,19 @@ STATE = ROOT / "state/screenshots.json"
 
 ALLOWED_SIZES = [(1280, 800), (1440, 900), (2560, 1600), (2880, 1800)]
 
-# 截屏类型 → 展示名。用 DISPLAY_ONLY（不出现在缩略图选择里），
-# 因为 macOS 只有一种展示尺寸；多套只是为了给不同页面排序。
-SCREENSHOT_SETS = [
-    ("APP_DESKTOP", "display_only"),
-    ("APP_DETAILS", "display_only"),
-]
+# macOS 只有一个截图类型：APP_DESKTOP。
+#
+# 之前这里抄了 iOS 的两套（APP_DESKTOP + APP_DETAILS）并把图交错分进两个
+# set，那是从 iPhone「6.5"/6.7" 两档展示」搬过来的形状，macOS 根本没有这回事。
+# 后果不只是多两个空 set：`APP_DETAILS` 在 macOS 版本下建出来永远不会被
+# 审核看到，却会让 App Store Connect 里出现两套互相矛盾的图。
+#
+# 属性名也是实测出来的：ASC 对 `appScreenshotSets` 只认 `screenshotDisplayType`
+# 一个字段。写 `appStoreScreenshotType` / `appStoreScreenshotDisplayType`
+# 会被 409 挡回：
+#   ENTITY_ERROR.ATTRIBUTE.UNKNOWN
+#   "'appStoreScreenshotType' is not an attribute on the resource 'appScreenshotSets'"
+SCREENSHOT_DISPLAY_TYPE = "APP_DESKTOP"
 
 
 def fail(message: str) -> None:
@@ -111,7 +118,7 @@ def find_set(env: dict, localization_id: str, type_name: str) -> str | None:
     found = mas.request(
         "GET",
         f"/appStoreVersionLocalizations/{localization_id}/appScreenshotSets"
-        f"?filter[appStoreScreenshotType]={type_name}",
+        f"?filter[screenshotDisplayType]={type_name}",
         env,
     )["data"]
     if isinstance(found, list):
@@ -119,7 +126,7 @@ def find_set(env: dict, localization_id: str, type_name: str) -> str | None:
     return None
 
 
-def ensure_set(env: dict, localization_id: str, type_name: str, display: str) -> str:
+def ensure_set(env: dict, localization_id: str, type_name: str) -> str:
     existing = find_set(env, localization_id, type_name)
     if existing:
         print(f"  复用 screenshotSet {existing} ({type_name})")
@@ -131,7 +138,7 @@ def ensure_set(env: dict, localization_id: str, type_name: str, display: str) ->
         {
             "data": {
                 "type": "appScreenshotSets",
-                "attributes": {"appStoreScreenshotType": type_name, "appStoreScreenshotDisplayType": display},
+                "attributes": {"screenshotDisplayType": type_name},
                 "relationships": {
                     "appStoreVersionLocalization": {
                         "data": {
@@ -262,21 +269,20 @@ def main() -> None:
     env = mas.load_env()
     localization_id = find_localization(env, args.locale)
     state = load_state()
+
+    print(f"\n[{SCREENSHOT_DISPLAY_TYPE}] {len(shots)} 张")
+    set_id = ensure_set(env, localization_id, SCREENSHOT_DISPLAY_TYPE)
     uploaded: list[str] = []
+    for shot in shots:
+        upload(env, set_id, shot)
+        uploaded.append(shot.name)
 
-    for index, (type_name, display) in enumerate(SCREENSHOT_SETS):
-        subset = shots[index:: len(SCREENSHOT_SETS)]
-        if not subset:
-            continue
-        print(f"\n[{type_name}] {len(subset)} 张")
-        set_id = ensure_set(env, localization_id, type_name, display)
-        for shot in subset:
-            upload(env, set_id, shot)
-            uploaded.append(f"{type_name}/{shot.name}")
-
-    state[args.locale] = uploaded
+    state[args.locale] = {
+        "set": set_id,
+        "screenshots": uploaded,
+    }
     save_state(state)
-    print(f"\n完成，共上传 {len(uploaded)} 张。")
+    print(f"\n完成，set {set_id} 共 {len(uploaded)} 张。")
 
 
 if __name__ == "__main__":
