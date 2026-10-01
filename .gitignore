@@ -63,3 +63,7 @@ private_keys/
 # 必须与完整版分开：两者共用一个 target 时，MAS 构建会覆盖完整版的
 # release 产物（实测 MAS 的 .app 把 Developer ID 签名的那份顶掉了，dmg 也没了）。
 target-mas/
+
+# Python 字节码
+__pycache__/
+*.py[cod]
