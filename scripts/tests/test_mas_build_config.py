@@ -688,3 +688,112 @@ class MasWhitelistNoiseTests(unittest.TestCase):
         )
         self.assertIn("protected: false", monitor)
         self.assertIn("protected_reason_key: None", monitor)
+
+
+class I18nKeyAvailabilityTests(unittest.TestCase):
+    """组件里 `t("…")` 用到的 key，中英两份词典里都必须能查到。
+
+    ## 为什么需要这条
+
+    抓截屏时发现进程页底部直接显示着 `process.masTerminateUnsupported`
+    —— 原始 key 印在界面上。查下去是**命名空间错位**：那条文案被写在
+    `scan:` 下面，而组件按 `process.` 去取。
+
+    这类问题极难靠常规手段发现：
+
+    - TypeScript 不报错（`t` 收的是任意 string）
+    - 组件测试也抓不到 —— 它们普遍 mock 了 `t: (key) => key`，于是
+      「查不到 key」和「正常显示 key」在测试里长得一模一样
+    - 词典的类型只约束自己那份，`tsc` 也过
+
+    只有真机截图才看得见。而截图是要上架的东西。
+    """
+
+    SRC = ROOT / "src"
+    PATTERN = re.compile(r"\bt(?:ext)?\(\s*\"([A-Za-z][A-Za-z0-9_.]+)\"")
+
+    def setUp(self) -> None:
+        self.zh = _flatten_dict(load_ts_dict(ROOT / "src/i18n/zh-CN.ts"))
+        self.en = _flatten_dict(load_ts_dict(ROOT / "src/i18n/en.ts"))
+
+    def _used_keys(self) -> dict[str, set[str]]:
+        used: dict[str, set[str]] = {}
+        for path in sorted(self.SRC.rglob("*.ts")) + sorted(self.SRC.rglob("*.tsx")):
+            name = path.name
+            if ".test." in name or name == "navItems.ts":
+                continue
+            text = path.read_text(encoding="utf-8")
+            for match in self.PATTERN.finditer(text):
+                used.setdefault(match.group(1), set()).add(str(path.relative_to(ROOT)))
+        return used
+
+    def test_the_scanner_finds_enough_keys_to_be_worth_running(self) -> None:
+        self.assertGreater(len(self._used_keys()), 100)
+
+    def test_every_used_key_exists_in_both_dictionaries(self) -> None:
+        used = self._used_keys()
+        missing = sorted(
+            f"{key}  ({', '.join(sorted(files))})"
+            for key, files in used.items()
+            if key not in self.zh or key not in self.en
+        )
+        self.assertEqual(
+            missing,
+            [],
+            "这些 key 在词典里查不到，界面会直接把 key 印出来：\n  " + "\n  ".join(missing),
+        )
+
+    def test_the_two_dictionaries_have_identical_key_sets(self) -> None:
+        only_zh = sorted(self.zh - self.en)
+        only_en = sorted(self.en - self.zh)
+        message = (
+            "中英词典 key 不一致 —— 缺哪边都会在某种语言下显示原始 key："
+            f"\n  仅中文有：{only_zh}"
+            f"\n  仅英文有：{only_en}"
+        )
+        self.assertEqual(only_zh + only_en, [], message)
+
+
+def load_ts_dict(path: Path) -> dict:
+    """把 `export const xx = { … };` 的字面量读成 dict。
+
+    不引入 TS 运行时：这两个词典是纯字面量，用括号配平截出来再交给
+    `json.loads`（尾逗号先去掉）。词典里若出现注释或函数，这个做法会失效
+    —— 那时这条门禁会**明显报错**而不是悄悄放过，比悄悄放过好。
+    """
+    import json
+
+    text = path.read_text(encoding="utf-8")
+    start = text.index("=", text.index("export const")) + 1
+    depth = 0
+    end = None
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                break
+    if end is None:
+        raise AssertionError(f"{path.name} 里没找到配平的字典字面量")
+    body = re.sub(r"//[^\n]*", "", text[start:end])
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    body = re.sub(r",(\s*[}\]])", r"\1", body)
+    # JS 允许 `appName:` 这种不带引号的 key，JSON 不允许 —— 补上。
+    body = re.sub(
+        r"([,{]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:", r'\1"\2":', body
+    )
+    return json.loads(body)
+
+
+def _flatten_dict(value, prefix: str = "") -> set[str]:
+    out: set[str] = set()
+    if not isinstance(value, dict):
+        return out
+    for key, child in value.items():
+        path = f"{prefix}.{key}" if prefix else key
+        out.add(path)
+        out |= _flatten_dict(child, path)
+    return out

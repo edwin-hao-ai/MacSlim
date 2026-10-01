@@ -154,7 +154,7 @@ export default function FolderAccessCard(props: {
 
           <Show when={failed()}>
             <div class="mt-2 text-xs text-danger-600" role="alert">
-              {t("opError.unknown", { error: failed()! })}
+              {t("opError.failed", { error: failed()! })}
             </div>
           </Show>
 

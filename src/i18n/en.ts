@@ -69,8 +69,6 @@ export const en: Dict = {
       "Protected processes (app main processes, multi-process family components, started under 10 minutes ago) can only be force-terminated — the whole process tree gets SIGKILLed.",
     forceTerminate: "Force terminate anyway",
     protectedHint: "Protected:",
-    masTerminateUnsupported:
-      "The App Store build runs in the system sandbox and cannot terminate other apps. Use the Developer ID build for that; this page still shows memory and CPU usage.",
     scanFailed: "Scan failed: {error}",
     optimizeFailed: "Optimization failed: {error}",
     whitelistTooltip: "Whitelist (never scan this process again)",
@@ -102,6 +100,8 @@ export const en: Dict = {
     noProcesses: "No visible processes",
     terminateSelected: "Terminate selected ({count})",
     protectedHint: "Protected rows can only be force-terminated (with confirmation)",
+    masTerminateUnsupported:
+      "The App Store build runs in the system sandbox and cannot terminate other apps. Use the Developer ID build for that; this page still shows memory and CPU usage.",
     whitelistLocked: "Whitelisted processes are never terminated",
     failedTitle: "These processes could not be terminated:",
     confirmProtectedTitle: "Force-terminate protected processes?",
