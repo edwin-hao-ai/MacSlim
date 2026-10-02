@@ -940,6 +940,121 @@ class MasCacheEmptyStateTruthTests(unittest.TestCase):
         )
 
 
+class ScreenshotFixtureTests(unittest.TestCase):
+    """造截图用的假缓存：只许「移开」，绝不许「删除」用户真实数据。
+
+    ## 为什么风险集中在这个脚本
+
+    「清理完成」和「历史记录」这两张图要求真的清理过一次。但所有缓存扫描器
+    都是**整目录一个条目**的粒度（`scan_app_logs` 给整个 `~/Library/Logs`
+    出一个，`scan_npm` 给整个 `~/.npm` 出一个），所以往真实目录里塞 fixture
+    会被连锅端。
+
+    于是唯一安全的机制是移开 + 还原。真实数据全程只被改名。这条一旦写错，
+    损失的是用户真实的日志目录 —— 而且**不可撤销**（AGENTS §4.1）。
+    """
+
+    SCRIPT = ROOT / "scripts/screenshot_fixture.sh"
+
+    def setUp(self) -> None:
+        self.raw = self.SCRIPT.read_text(encoding="utf-8")
+        self.source = strip_shell_comments(self.raw)
+
+    def test_it_empties_the_directory_instead_of_renaming_it(self) -> None:
+        """只能搬空目录，不能改名 —— `~/Library/*` 受 TCC 保护，改名被拒。
+
+        实测 `mv ~/Library/Logs ~/Library/Logs.shot-backup` 返回
+        `Permission denied`，而往里写文件是可以的。所以机制只能是
+        「把内容移出去、目录原地留空」。
+        """
+        self.assertIn(
+            'find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -exec mv',
+            self.source,
+            "要连隐藏项一起搬走（glob 会漏 .DS_Store）",
+        )
+        self.assertNotRegex(
+            self.source,
+            r'mv\s+"\$TARGET_DIR"',
+            "目录本身不可改名 —— 实测被 TCC 拒绝",
+        )
+
+    def test_the_backup_is_only_removed_after_a_successful_merge(self) -> None:
+        """备份可以在 rsync 成功**之后**删，但不能之前删。
+
+        一开始我把这条写成「备份绝不能删」—— 那是我自己写错了：rsync 是
+        **复制**不是移动，合并完备份里还留着同一份内容，不删就等于在用户
+        家目录里留一份日志副本，而且下次 `up` 会因为「备份已存在」直接拒绝。
+        真正的约束只有顺序：`set -e` 保证 rsync 出错就不会走到 rm。
+        """
+        rsync_at = self.source.index('rsync -a "$BACKUP_DIR/"')
+        rm_at = self.source.index('rm -rf "$BACKUP_DIR"')
+        self.assertLess(rsync_at, rm_at, "必须先合并成功，才允许删备份")
+        self.assertEqual(
+            self.source.count('rm -rf "$BACKUP_DIR"'),
+            1,
+            "备份只应在还原流程末尾删一次，别处出现就是漏了保护",
+        )
+        # 删备份之前不允许有任何针对它的删除
+        for line in self.source[:rm_at].splitlines():
+            self.assertNotIn(
+                'rm -rf "$BACKUP_DIR"', line, "合并之前不许删备份"
+            )
+
+    def test_restore_merges_instead_of_overwriting(self) -> None:
+        """目录被搬空的那几分钟里，系统照常会往 Logs 写新日志。
+
+        直接覆盖会把期间产生的新日志弄丢；只移回旧的又会把新的挤掉。必须
+        rsync 合并 —— 目录项也要递归合并，`CrashReporter` 这种期间又被写
+        过的目录才不会丢。
+        """
+        self.assertIn("rsync -a", self.source)
+        self.assertIn("期间新产生的文件", self.source, "要提示操作者目录不再干净")
+
+    def test_it_only_deletes_its_own_fixture_files(self) -> None:
+        self.assertIn('rm -f "$TARGET_DIR"/"$FIXTURE_PREFIX"-*', self.source)
+        self.assertNotIn(
+            'rm -rf "$TARGET_DIR"',
+            self.source,
+            "绝不能整目录删：期间新产生的日志就在里面",
+        )
+
+    def test_it_probes_writability_before_moving_anything(self) -> None:
+        """先确认能写，再搬空。
+
+        顺序反了会出现「备份已建、fixture 建不了」的半成品状态 ——
+        用户的日志已经在备份里，而脚本报错退出。
+        """
+        probe = self.source.index('-probe" || {')
+        move = self.source.index("-exec mv {} \"$BACKUP_DIR/\"")
+        self.assertLess(probe, move, "可写性探测必须早于搬空")
+
+    def test_it_refuses_to_start_when_a_backup_already_exists(self) -> None:
+        self.assertIn("上一次可能没还原干净", self.source)
+
+    def test_the_fixture_is_sparse_so_it_costs_almost_no_disk(self) -> None:
+        """`dir_size` 量的是 metadata().len()，所以稀疏文件的标称长度会被当真。
+
+        这不是取巧：`len()` 确实是这个文件的真实标称长度，扫描器也确实测出了
+        它，清理也真的删了它、历史也真的记下了它。稀疏只是让「5 GB」这个数字
+        不必真的占 5 GB 磁盘。
+        """
+        self.assertIn("truncate -s", self.source)
+        self.assertIn("稀疏文件", self.raw)
+
+    def test_it_targets_app_logs_on_purpose(self) -> None:
+        """目标是 ~/Library/Logs —— 换目标必须重新论证，不能随手改。
+
+        这里读**原文**（含注释）而不是剥掉注释的代码：守的正是「选择旁边必须
+        留着理由」。改目标而不更新理由，通常意味着有人跳过了「沙箱里这个
+        目录到底扫不扫得到」这个验证 —— 而那正是选它的唯一理由。
+        """
+        self.assertIn(
+            'TARGET_DIR="${SHOT_FIXTURE_DIR:-$HOME/Library/Logs}"', self.raw
+        )
+        self.assertIn("纯路径扫描", self.raw, "要保留「为什么不选 Caches」的论证")
+        self.assertIn("受 TCC/SIP 保护", self.raw, "要保留「为什么不能改名」的实测结论")
+
+
 class LongCopyLayoutTests(unittest.TestCase):
     """不得对会随语言变长的文案使用 `whitespace-nowrap`。
 
