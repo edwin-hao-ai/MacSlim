@@ -421,6 +421,7 @@ export const en: Dict = {
     groupCount: "{count} items · {size}",
     noAccess:
       "No folder has been authorized yet, so no cache is visible. Authorize a folder and scan again.",
+    noCleanable: "We checked the folders you authorized — nothing there is safe to clean.",
     noItems: "No caches to clean. Your Mac is spotless.",
     partialFail: "Some items failed to clean",
     notifyTitle: "MacSlim cleanup complete",

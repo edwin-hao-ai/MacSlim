@@ -16,7 +16,19 @@ const mocks = vi.hoisted(() => ({
   // 后端每阶段事件的手动触发入口，测试靠它驱动真实进度
   stageHandlers: [] as Array<(u: StageUpdate) => void>,
   unlisten: vi.fn(),
+  listFolderAccess: vi.fn(),
 }));
+
+// 授权能力只在 App Store 版为真。默认形态是 developer_id（folderGrant 为假），
+// 所以必须显式把它打开，空态那两条分支才走得到。
+vi.mock("@/lib/flavor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/flavor")>();
+  return {
+    ...actual,
+    can: (capability: string) =>
+      capability === "folderGrant" ? true : actual.can(capability),
+  };
+});
 
 vi.mock("@/lib/tauri", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tauri")>();
@@ -26,6 +38,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
     prepareOperation: mocks.prepareOperation,
     executeOperation: mocks.executeOperation,
     onCacheScanProgress: mocks.onCacheScanProgress,
+    listFolderAccess: mocks.listFolderAccess,
   };
 });
 
@@ -156,6 +169,10 @@ const resetScanMocks = () => {
   mocks.onCacheScanProgress.mockReset();
   mocks.stageHandlers.length = 0;
   mocks.unlisten.mockReset();
+  // 默认「一个目录都没授权」。个别用例会覆盖成已授权 —— 空态的两条分支
+  // 就是靠这个区分的。
+  mocks.listFolderAccess.mockReset();
+  mocks.listFolderAccess.mockResolvedValue([]);
   mocks.scanCache.mockResolvedValue(scanEnvelope());
   // 默认注册一个立即返回的监听；个别测试会覆盖成「手动 resolve」来制造竞态
   mocks.onCacheScanProgress.mockImplementation(
@@ -620,5 +637,63 @@ describe("CacheView scan stage progress", () => {
       expect(handles[0]).toHaveBeenCalledTimes(1);
       expect(handles[1]).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("空态必须说实话", () => {
+  // 这组用例守的是一句**假话**。
+  //
+  // 原先空态的判据是 `needsFolderGrant()` —— 一个静态能力位，在 MAS 下恒为
+  // true。于是即使用户六个目录全授权了、Mac 也确实干净，界面照样显示
+  // 「还没授权任何目录，所以看不到可清理的缓存」。
+  //
+  // 后端 folder_access.rs 的注释早就写明了该怎么修：
+  //   「UI 必须据此告诉用户去授权，而不是显示『没有发现可清理的缓存』」
+  // 而它自己造的 RootsReason 又从没被前端接过，scan_roots* 至今是死代码。
+  //
+  // 判据改成「到底授权了没有」——这个信息前端本来就拿得到：
+  // FolderAccessCard 为了画卡片一直在调 listFolderAccess()。
+  beforeEach(resetScanMocks);
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const emptyScan = () => ({
+    snapshot_id: "snap-empty",
+    expires_at_ms: 1_700_000_000_000,
+    value: { items: [], total_bytes: 0, scanned_at_ms: 1 },
+  });
+
+  const grantedTarget = (key: string) => ({
+    key,
+    relative: "Library/Logs",
+    reasonKey: "access.target.userLogs",
+    displayName: "Logs",
+    granted: true,
+    grantedPath: "/Users/tester/Library/Logs",
+  });
+
+  it("一个目录都没授权时，空态引导去授权", async () => {
+    mocks.scanCache.mockResolvedValue(emptyScan());
+    render(() => <CacheView />);
+
+    expect(await screen.findByText("cache.noAccess")).toBeTruthy();
+    expect(screen.queryByText("cache.noCleanable")).toBeNull();
+  });
+
+  it("已经授权过却扫出 0 B 时，不能再说「还没授权」", async () => {
+    mocks.scanCache.mockResolvedValue(emptyScan());
+    mocks.listFolderAccess.mockResolvedValue([
+      grantedTarget("user_logs"),
+      grantedTarget("user_caches"),
+    ]);
+    render(() => <CacheView />);
+
+    expect(await screen.findByText("cache.noCleanable")).toBeTruthy();
+    expect(
+      screen.queryByText("cache.noAccess"),
+      "已授权却显示「还没授权」，是在对用户撒谎",
+    ).toBeNull();
   });
 });

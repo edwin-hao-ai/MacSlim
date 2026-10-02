@@ -383,6 +383,7 @@ export const zhCN = {
     // App Store 版专用：0 B 在沙箱下的真实含义是「看不到」，不是「很干净」。
     // 说「你的 Mac 很干净」是把权限问题说成用户的好处，属于审核眼里的误导。
     noAccess: "还没授权任何目录，所以看不到可清理的缓存。授权后重新扫描即可。",
+    noCleanable: "已检查过你授权的目录，没有可安全清理的缓存。",
     partialFail: "部分项目清理失败",
     notifyTitle: "MacSlim 清理完成",
     notifyBody: "已释放 {size}，共清理 {count} 项",

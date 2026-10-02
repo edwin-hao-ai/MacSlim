@@ -871,6 +871,75 @@ class FolderGrantPrivacyTruthTests(unittest.TestCase):
         )
 
 
+class MasCacheEmptyStateTruthTests(unittest.TestCase):
+    """空态不许用「这个形态有没有授权能力」当判据。
+
+    ## 这条门禁来自一句假话
+
+    缓存页空态原先是 `needsFolderGrant()` —— 一个**静态能力位**，在 MAS 下
+    恒为 true。于是即使用户六个目录全授权了、Mac 也确实干净，界面照样显示
+    「还没授权任何目录，所以看不到可清理的缓存」：用户点遍六个「授权」按钮
+    之后，这句话一个字都不会变。
+
+    这不只是上架截图难看 —— 它是对真实用户撒谎，而且属于 AGENTS §7.2
+    明令禁止的那类「用户可见错误必须是人话且如实」。
+
+    后端 `folder_access.rs` 的注释早就写明了该怎么修：
+
+        UI 必须据此告诉用户去授权，而不是显示「没有发现可清理的缓存」
+
+    它为此造的 `RootsReason` 从没被前端接过，`scan_roots*` 至今是死代码。
+    而判据其实前端本来就拿得到：`FolderAccessCard` 为了画卡片一直在调
+    `listFolderAccess()`，把 granted 数报出来就够，不必改后端 IPC 形状。
+    """
+
+    VIEW = ROOT / "src/views/CacheView.tsx"
+    CARD = ROOT / "src/components/FolderAccessCard.tsx"
+
+    def test_the_judgement_is_the_granted_count_not_the_capability(self) -> None:
+        code = strip_tsx_comments(self.VIEW.read_text(encoding="utf-8"))
+        self.assertIn(
+            'grantedCount() > 0 ? "cache.noCleanable" : "cache.noAccess"',
+            code,
+            "空态判据必须是「到底授权了没有」",
+        )
+        # 能力位只能决定「这一形态有没有授权这回事」，不能决定「用户授权了没有」
+        self.assertNotRegex(
+            code,
+            r'when=\{needsFolderGrant\(\)\}[\s\S]{0,200}cache\.noAccess',
+            "cache.noAccess 不能再挂在能力位门禁下 —— 它是「用户没授权」的意思",
+        )
+
+    def test_the_card_reports_its_granted_count(self) -> None:
+        code = strip_tsx_comments(self.CARD.read_text(encoding="utf-8"))
+        self.assertIn("onGrantedCount", code, "卡片要把已授权数量报给调用方")
+        self.assertIn(
+            "createEffect",
+            code,
+            "上报要走 effect：首次加载完成、以及 grant/revoke 之后都要自动补发",
+        )
+
+    def test_both_branches_have_real_copy_in_both_dictionaries(self) -> None:
+        """两句必须是两句**不同**的话，而且都要有中英文。"""
+        for name in ("zh-CN.ts", "en.ts"):
+            keys = _flatten_dict(load_ts_dict(ROOT / "src/i18n" / name))
+            for key in ("cache.noAccess", "cache.noCleanable", "cache.noItems"):
+                self.assertIn(key, keys, f"{name} 缺 {key}")
+
+        zh = load_ts_dict(ROOT / "src/i18n/zh-CN.ts")
+        en = load_ts_dict(ROOT / "src/i18n/en.ts")
+        self.assertNotEqual(
+            zh["cache"]["noAccess"],
+            zh["cache"]["noCleanable"],
+            "「没授权」和「已授权但干净」不能是同一句话",
+        )
+        self.assertNotEqual(
+            en["cache"]["noAccess"],
+            en["cache"]["noCleanable"],
+            "同上（英文）",
+        )
+
+
 class LongCopyLayoutTests(unittest.TestCase):
     """不得对会随语言变长的文案使用 `whitespace-nowrap`。
 

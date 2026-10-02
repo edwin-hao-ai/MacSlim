@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { FolderOpen, ShieldCheck, Trash2 } from "lucide-solid";
 import { useI18n } from "@/i18n";
 import { grantFolderAccess, listFolderAccess, revokeFolderAccess } from "@/lib/tauri";
@@ -32,11 +32,30 @@ import type { FolderTarget } from "@/lib/ipcTypes";
 export default function FolderAccessCard(props: {
   /** 授权成功后触发，由调用方重跑扫描 */
   onChanged?: () => void;
+  /**
+   * 已授权目录的数量变化时上报。
+   *
+   * 为什么需要：调用方要靠这个区分「没授权所以看不到」与「授权了但确实
+   * 干净」—— 这两句话完全不同，混成一句就是在对用户撒谎。而这个信息
+   * 本来只有本组件有（它一直在调 listFolderAccess），让调用方再发一次
+   * IPC 只会多一个数据来源。
+   */
+  onGrantedCount?: (count: number) => void;
 }) {
   const { t } = useI18n();
   const [targets, setTargets] = createSignal<FolderTarget[]>([]);
   const [busy, setBusy] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal<string | null>(null);
+
+  const grantedCount = () => targets().filter((t) => t.granted).length;
+
+  // 上报必须走 effect 而不是顺手写在 refresh 里：这里有 createEffect，
+  // 它会在 targets 变化时（包括首次加载完成、以及 grant/revoke 之后）
+  // 自动补发，调用方不用关心「什么时候该同步一次」。
+  createEffect(() => {
+    const count = grantedCount();
+    props.onGrantedCount?.(count);
+  });
 
   const refresh = async () => {
     try {
@@ -83,8 +102,6 @@ export default function FolderAccessCard(props: {
       setBusy(null);
     }
   };
-
-  const grantedCount = () => targets().filter((t) => t.granted).length;
 
   return (
     <div class="card p-4" data-testid="folder-access-card">

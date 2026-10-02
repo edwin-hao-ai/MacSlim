@@ -105,6 +105,7 @@ const CacheView: Component = () => {
   const [cleanProgress, setCleanProgress] = createSignal(0);
   const [displayFreedBytes, setDisplayFreedBytes] = createSignal(0);
   const [showFlash, setShowFlash] = createSignal(false);
+  const [grantedCount, setGrantedCount] = createSignal(0);
   const [pending, setPending] = createSignal<PreparedOperation | null>(null);
   // prepare 阶段（点「清理」→ 确认弹窗弹出）的 loading。
   //
@@ -153,6 +154,22 @@ const CacheView: Component = () => {
  * - 缓存清理能力在（否则这页本来就不该出现）
  */
 const needsFolderGrant = () => can("folderGrant");
+
+// 空态要说两句不同的话，判据是「到底授权了没有」而不是「这个形态有没有
+// 授权这个能力」。
+//
+// 原先用 needsFolderGrant() 当判据，而它是**静态能力位**，在 MAS 下恒为
+// true。于是即使用户六个目录全授权了、Mac 也确实干净，界面照样显示
+// 「还没授权任何目录，所以看不到可清理的缓存」—— 那是在对用户撒谎，而且
+// 用户点遍六个「授权」按钮之后这句话一个字都不会变。
+//
+// 后端 folder_access.rs 的注释早就写明了该怎么修（「UI 必须据此告诉用户去
+// 授权，而不是显示『没有发现可清理的缓存』」），它为此造的 RootsReason 却
+// 从没被前端接过，scan_roots* 至今是死代码。而判据其实前端本来就拿得到：
+// FolderAccessCard 为了画卡片一直在调 listFolderAccess()，把 granted 数报出来
+// 即可，不必再发一次 IPC，也不必改后端的 IPC 形状。
+const emptyStateKey = () =>
+  grantedCount() > 0 ? "cache.noCleanable" : "cache.noAccess";
 
 const runScan = async () => {
     setScanning(true);
@@ -320,7 +337,10 @@ const runScan = async () => {
         上面那个 0 B 有什么关系」。放在产生需求的地方，因果链是连着的。
       */}
       <Show when={can("folderGrant")}>
-        <FolderAccessCard onChanged={() => void runScan()} />
+        <FolderAccessCard
+          onChanged={() => void runScan()}
+          onGrantedCount={setGrantedCount}
+        />
       </Show>
 
       <CleanupFlash visible={showFlash()} onDone={() => setShowFlash(false)} />
@@ -450,14 +470,15 @@ const runScan = async () => {
         fallback={
           <Show when={!scanning()}>
             <div class="card p-12 text-center text-sm text-zinc-500">
-              {/* 0 B 在沙箱下的真实含义是「看不到」，不是「很干净」。
-                  说成「你的 Mac 很干净」是把权限问题说成用户的好处 ——
-                  用户会以为刚清过，而审核看到的是误导。 */}
+              {/* 0 B 在沙箱下的真实含义分两种：「还没授权所以看不到」和
+                  「授权了、也确实没有可安全清理的」。说成「你的 Mac 很干净」
+                  是把权限问题说成用户的好处；而把「已授权」也说成「还没授权」
+                  则是让用户点遍六个授权按钮之后仍得不到解释。 */}
               <Show
                 when={needsFolderGrant()}
                 fallback={t("cache.noItems")}
               >
-                {t("cache.noAccess")}
+                {t(emptyStateKey())}
               </Show>
             </div>
           </Show>
