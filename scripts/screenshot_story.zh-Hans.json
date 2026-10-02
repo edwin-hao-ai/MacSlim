@@ -1,0 +1,22 @@
+{
+  "01-authorized.png": {
+    "headline": "它只读你亲手授权的目录",
+    "subline": "App Store 版跑在系统沙箱里。授权一次，长期有效，随时可撤销。"
+  },
+  "02-scanned.png": {
+    "headline": "每一项都标着体积与风险",
+    "subline": "重新获取成本低于 5 分钟的才会默认选中；大件不会替你勾上。"
+  },
+  "03-confirm.png": {
+    "headline": "删之前，先让你看清",
+    "subline": "逐项列出要删什么，并且告诉你这一操作不可撤销。"
+  },
+  "04-cleaned.png": {
+    "headline": "删掉多少，一目了然",
+    "subline": "全程在本机完成，没有账号、没有统计、没有广告。"
+  },
+  "05-history.png": {
+    "headline": "每一步都留痕，可回查",
+    "subline": "操作日志只存在你的机器上，删除应用即一并删除。"
+  }
+}

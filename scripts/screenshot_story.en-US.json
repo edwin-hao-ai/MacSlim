@@ -1,0 +1,22 @@
+{
+  "01-authorized.png": {
+    "headline": "It reads only the folders you authorize",
+    "subline": "The App Store edition runs inside the system sandbox. Authorize once, revoke any time."
+  },
+  "02-scanned.png": {
+    "headline": "Every item shows its size and its risk",
+    "subline": "Only what you can re-fetch within 5 minutes is pre-selected. Big items are never ticked for you."
+  },
+  "03-confirm.png": {
+    "headline": "You see exactly what goes, before it goes",
+    "subline": "Each item is listed, and you are told plainly that this cannot be undone."
+  },
+  "04-cleaned.png": {
+    "headline": "Exactly how much you got back",
+    "subline": "All of it happens on your Mac. No account, no analytics, no ads."
+  },
+  "05-history.png": {
+    "headline": "Every step is logged and checkable",
+    "subline": "The log lives only on your Mac, and goes away with the app."
+  }
+}

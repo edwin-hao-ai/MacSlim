@@ -13,6 +13,7 @@
 - PrivacyInfo 声明了用到的 required-reason API，且 tracking 为 false
 """
 from __future__ import annotations
+import json
 import plistlib
 import re
 import unittest
@@ -938,6 +939,129 @@ class MasCacheEmptyStateTruthTests(unittest.TestCase):
             en["cache"]["noCleanable"],
             "同上（英文）",
         )
+
+
+class ScreenshotStoryTests(unittest.TestCase):
+    """五拍故事线：文案要齐、两种语言要对得上、叠字不许盖住侧栏。
+
+    ## 为什么这些也要钉
+
+    叠字是**唯一**能让 App Store 有故事线的手段（Apple 自己不会给 macOS 截图
+    加标题），所以文案和工具就成了关键路径的一部分。而它失败得很安静：叠字
+    脚本照样退出 0、PNG 尺寸照样 2880x1800，只有把图打开看才发现问题 ——
+    第一版就出了两个：渐变太透导致白字和应用文字叠在一起，以及整幅盖满把侧栏
+    顶部盖掉、导航列表从中间开始，看起来像应用坏了。
+    """
+
+    SCRIPT = ROOT / "scripts/annotate_screenshots.py"
+    STORIES = {
+        "zh-Hans": ROOT / "scripts/screenshot_story.zh-Hans.json",
+        "en-US": ROOT / "scripts/screenshot_story.en-US.json",
+    }
+    # 五拍：授权 → 看得见 → 敢删 → 删了 → 可追溯
+    BEATS = (
+        "01-authorized.png",
+        "02-scanned.png",
+        "03-confirm.png",
+        "04-cleaned.png",
+        "05-history.png",
+    )
+
+    def setUp(self) -> None:
+        self.stories = {
+            locale: json.loads(path.read_text(encoding="utf-8"))
+            for locale, path in self.STORIES.items()
+        }
+
+    def test_both_locales_cover_exactly_the_five_beats(self) -> None:
+        for locale, story in self.stories.items():
+            self.assertEqual(
+                tuple(sorted(story)),
+                tuple(sorted(self.BEATS)),
+                f"{locale} 的文案条目必须正好是这五拍",
+            )
+
+    def test_every_beat_has_a_headline_and_a_subline(self) -> None:
+        for locale, story in self.stories.items():
+            for beat, copy in story.items():
+                for field in ("headline", "subline"):
+                    self.assertTrue(
+                        copy.get(field, "").strip(),
+                        f"{locale}/{beat} 缺 {field}",
+                    )
+
+    def test_no_two_beats_say_the_same_thing(self) -> None:
+        """五句话必须真的在推进故事，而不是同一句换了五个说法。"""
+        for locale, story in self.stories.items():
+            headlines = [story[beat]["headline"] for beat in self.BEATS]
+            self.assertEqual(
+                len(set(headlines)),
+                len(headlines),
+                f"{locale} 有两拍标题完全相同",
+            )
+
+    def test_the_english_copy_has_no_chinese_left_in_it(self) -> None:
+        """抓「漏译」的残留：英文那套里混进了中文字符。
+
+        一开始我想用「中英标题长度倍数」来近似判断是否等义翻译 —— 那是个坏代理：
+        英文天然比中文长得多（一句 12 字的中文对应 39 个字符的英文很常见），于是
+        正常的文案被判成不等义。
+
+        字符级互查才是真正能自动抓到的问题：**复制粘贴时忘了翻译**，会在英文
+        那套里留下中文字符，而这种错误在缩略图尺寸下极难被肉眼发现。
+        等义与否最终仍要人读一遍，但至少漏译能被挡住。
+        """
+        cjk = re.compile(r"[一-鿿　-〿＀-￯]")
+        for beat, copy in self.stories["en-US"].items():
+            for field in ("headline", "subline"):
+                found = cjk.findall(copy[field])
+                self.assertEqual(
+                    found,
+                    [],
+                    f"en-US/{beat} 的 {field} 里混进了中文{found} —— 漏译",
+                )
+
+        for beat, copy in self.stories["zh-Hans"].items():
+            for field in ("headline", "subline"):
+                self.assertTrue(
+                    cjk.search(copy[field]),
+                    f"zh-Hans/{beat} 的 {field} 没有中文 —— 可能贴错了语言",
+                )
+
+    def test_the_tool_refuses_to_upload_a_shot_without_copy(self) -> None:
+        """缺文案必须直接失败，而不是叠一张没故事的图上去。"""
+        source = self.SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("宁可不叠", source)
+        self.assertIn("missing", source)
+
+    def test_the_caption_never_covers_the_sidebar(self) -> None:
+        """盖住侧栏顶部会让导航列表从中间开始，一眼看着像应用坏了。"""
+        source = self.SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("GUTTER", source)
+        gutter = int(
+            re.search(r"GUTTER\s*=\s*(\d+)", source).group(1)
+        )
+        # 侧栏实测宽 280 点 @2x = 560 像素（截屏里「缓存清理」选中态的右边缘
+        # 就在 x≈560）。gutter 必须不小于它，否则会啃掉侧栏。
+        self.assertGreaterEqual(gutter, 560, "文案栏起点必须在侧栏右侧")
+        self.assertIn(
+            "draw.rectangle([(GUTTER, 0)",
+            source,
+            "实心栏只能画在内容区，不能整幅盖满",
+        )
+
+    def test_the_band_is_opaque_with_a_fade_below(self) -> None:
+        """半透明渐变会让下面应用文字与我们的文字叠在一起，两边都不可读。"""
+        source = self.SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("fill=(*BAR_TOP, 255)", source, "实心部分必须不透明")
+        self.assertIn("FADE", source, "下沿要留柔化，避免硬边像贴纸")
+        self.assertIn("CANVAS = (2880, 1800)", source, "尺寸必须正好是 ASC 认可的那档")
+
+    def test_the_originals_are_never_overwritten(self) -> None:
+        """原始截屏是无价的事实：叠坏了要能重做。"""
+        source = self.SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("-shot", source, "输出应落到单独的目录")
+        self.assertIn("原图不动", source)
 
 
 class ScreenshotFixtureTests(unittest.TestCase):
