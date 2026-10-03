@@ -215,3 +215,61 @@ fn expand_tilde_works() {
         PathBuf::from("/absolute/path")
     );
 }
+
+/// `~` 必须按**真实 home** 展开，不能按沙箱里的 `$HOME`。
+///
+/// ## 后果不是「路径不对」，是这个功能整个不работа
+///
+/// App Store 版里 `$HOME` 指向应用自己的空 container（实测
+/// `home_env = .../Containers/com.vgoapp.macslim/Data`，而 `real_home =
+/// /Users/edwinhao`）。而扫描器走的是 `folder_access::scanner_home()`，也就是
+/// passwd 里的真实 home —— 于是同一个目录，**扫描时看的是真实家目录，清理时
+/// 看的是容器**。
+///
+/// 清理项的 path 是 `"~/Library/Logs"` 这种带波浪号的字符串，展开后落到
+/// 容器里一个不存在的路径，`canonicalize` 直接失败。实测表现：
+///
+///     历史：成功 0 项，失败 1 项，释放 0
+///
+/// 也就是说：用户授权了目录、看到 10.5 GB 可释放、按下清理、确认，然后
+/// **什么都没删**。好在它如实上报了失败（没有静默假成功），但功能等于没有。
+///
+/// ## 这条测试必须自己给 home，否则抓不到
+///
+/// 直接断言 `expand_tilde("~/x") == scanner_home().join("x")` 在**非沙箱**的
+/// cargo test 里恒真 —— 那里 `$HOME` 就是真实 home。所以真正有鉴别力的是
+/// 下面那条：拿一个假的 home 喂进去，看它会不会用错。
+#[test]
+fn expand_tilde_from_expands_against_the_home_it_is_given() {
+    let fake = PathBuf::from("/Users/someone-else");
+
+    assert_eq!(
+        expand_tilde_from("~/Library/Logs", &fake),
+        fake.join("Library/Logs"),
+        "波浪号必须展开成**给定的** home"
+    );
+    assert_eq!(expand_tilde_from("~", &fake), fake);
+    assert_eq!(
+        expand_tilde_from("/absolute/path", &fake),
+        PathBuf::from("/absolute/path"),
+        "绝对路径不受 home 影响"
+    );
+    assert_eq!(
+        expand_tilde_from("relative/path", &fake),
+        PathBuf::from("relative/path"),
+        "相对路径不该被拼到 home 上"
+    );
+}
+
+/// 清理用的那个 `expand_tilde` 必须把真实 home 传进去。
+///
+/// 这条是「接口接对了」的断言：上面的纯函数测试证明 `expand_tilde_from` 行为
+/// 正确，这条证明生产路径真的用了 `scanner_home()` 而不是 `$HOME`。
+#[test]
+fn the_cleanup_expander_uses_the_real_home() {
+    let expected = crate::folder_access::scanner_home();
+    assert_eq!(
+        expand_tilde("~/Library/Logs"),
+        expected.join("Library/Logs")
+    );
+}

@@ -733,13 +733,34 @@ async fn remove_directory_sudo(path: &Path) -> Result<(), UserError> {
 }
 
 fn expand_tilde(s: &str) -> PathBuf {
+    expand_tilde_from(s, &crate::folder_access::scanner_home())
+}
+
+/// 把 `~/` 展开成 `home` 下的路径。**home 由调用方给**，这样它才能被测。
+///
+/// ## 为什么不能直接用 `dirs::home_dir()`
+///
+/// App Store 版里 `$HOME` 指向应用自己的空 container（实测 `home_env =
+/// .../Containers/com.vgoapp.macslim/Data`，而 `real_home = /Users/edwinhao`）。
+/// 而扫描器走的是 `folder_access::scanner_home()` —— passwd 里的真实 home。
+/// 两者不一致的后果不是「路径算错」，而是**这个功能整个不работа**：
+///
+/// - 扫描阶段：真实 home 下的 `~/Library/Logs`，量出 10.5 GB
+/// - 清理阶段：`~` 展开到 container 里一个**不存在**的路径，`canonicalize`
+///   直接失败
+///
+/// 实测表现：界面列出 10.5 GB 可释放、按清理、确认，然后
+/// 「成功 0 项，失败 1 项，释放 0」—— 什么都没删。
+///
+/// 之前这里写的是 `dirs::home_dir()`，而在**非沙箱**的 `cargo test` 里
+/// `$HOME` 恰好就是真实 home，所以测试一直是绿的 —— 这类「只在沙箱里才
+/// 出错」的 bug 用直接断言是抓不到的，必须把 home 变成参数才能测。
+fn expand_tilde_from(s: &str, home: &Path) -> PathBuf {
     if let Some(stripped) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
+        return home.join(stripped);
     }
     if s == "~" {
-        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(s));
+        return home.to_path_buf();
     }
     PathBuf::from(s)
 }
