@@ -364,13 +364,25 @@ pub fn resolve_and_access(bookmark_base64: &str) -> Option<SecurityScope> {
 
 /// 让用户在文件选择框里选一个目录。
 ///
-/// 返回用户选中的路径；用户取消返回 `None`。**必须在主线程调用。**
+/// `directory` 是面板的**起始目录**，必须是用户点的那一行对应的真实路径。
+///
+/// 必须在主线程调用。
+///
+/// # 为什么要传起始目录
+///
+/// 不传的话，NSOpenPanel 会开在「系统记住的上一个位置」（首次是 Documents）。
+/// 于是点「废纸篓 `~/.Trash`」的授权，面板却开在 Documents —— 用户得自己
+/// 一层层翻，或者 `⌘⇧G` 手输路径。六个目标里有五个在 `~/Library` 或点号
+/// 目录（`.npm`/`.cargo`/`.Trash`），也就是说**每一次授权都要手动导航**。
+///
+/// 开在目标目录**本身**（而不是它的父目录）是有意的：这样 `showsHiddenFiles`
+/// 那条设置才有意义 —— 用户能看见自己正在授权的点号目录。
 ///
 /// # Safety
 ///
 /// `runModal` 会阻塞到用户做出选择。Tauri 的 `run_on_main_thread` 正是为此
 /// 提供的 —— 在别的线程调用会直接崩。
-pub unsafe fn pick_folder(prompt: &str) -> Option<std::path::PathBuf> {
+pub unsafe fn pick_folder(prompt: &str, directory: &std::path::Path) -> Option<std::path::PathBuf> {
     let panel: Option<Retained<AnyObject>> = msg_send![class!(NSOpenPanel), openPanel];
     let panel = panel?;
 
@@ -385,6 +397,23 @@ pub unsafe fn pick_folder(prompt: &str) -> Option<std::path::PathBuf> {
 
     let title = nsstring_from_str(prompt);
     let _: () = msg_send![&*panel, setMessage: &*title];
+
+    // 起始目录。目录不存在时 NSURL 会是 nil，面板会退回默认位置 —— 那不算
+    // 错误：目标目录本来就可能还没创建（比如 ~/.cargo 从没装过 Cargo），
+    // 用户仍然可以自己导航到别处去。
+    let start = directory.display().to_string();
+    if !start.is_empty() && std::path::Path::new(&start).is_dir() {
+        // 与 create_bookmark 用同一种写法（`class!` + `msg_send!`）：这个文件
+        // 把 NSURL 全当不透明对象，方法签名逐个自己声明，不走 objc2 的绑定。
+        let ns_path = nsstring_from_str(&start);
+        let url: Option<Retained<AnyObject>> = msg_send![
+            class!(NSURL),
+            fileURLWithPath: &*ns_path,
+        ];
+        if let Some(url) = url {
+            let _: () = msg_send![&*panel, setDirectoryURL: &*url];
+        }
+    }
 
     // NSModalResponseOK == 1
     let response: isize = msg_send![&*panel, runModal];

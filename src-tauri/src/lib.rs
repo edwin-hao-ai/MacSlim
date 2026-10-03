@@ -159,10 +159,26 @@ async fn grant_folder_access(
     prompt: String,
 ) -> Result<bool, UserError> {
     let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    // 起始目录 = 用户点的**那一行**对应的真实路径。
+    //
+    // 之前只传了提示文案，面板于是开在「系统记住的上一个位置」（首次是
+    // Documents）—— 点「废纸篓 ~/.Trash」的授权，面板却开在 Documents，
+    // 用户得自己翻过去或 ⌘⇧G 手输。六个目标里五个在 ~/Library 或点号目录，
+    // 等于每一次授权都要手动导航。
+    //
+    // 用 `scanner_home()`（passwd 里的真实 home）而不是 `$HOME`：沙箱里
+    // `$HOME` 是应用自己的 container，面板会开在一个用户根本不认识的地方。
+    let target_relative = folder_access::offerable_targets()
+        .into_iter()
+        .find(|candidate| candidate.key == target_key)
+        .map(|candidate| candidate.relative.to_string());
+    let start_directory = target_relative
+        .map(|relative| folder_access::scanner_home().join(relative))
+        .unwrap_or_else(folder_access::scanner_home);
     app.run_on_main_thread(move || {
         // SAFETY: pick_folder 会阻塞到用户做出选择，因此必须放到主线程 ——
         // NSOpenPanel 的 runModal 在别的线程调用会直接崩。
-        let picked = unsafe { folder_access::ffi::pick_folder(&prompt) };
+        let picked = unsafe { folder_access::ffi::pick_folder(&prompt, &start_directory) };
         let _ = tx.send(picked);
     })
     .map_err(|error| {

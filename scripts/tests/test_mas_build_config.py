@@ -941,6 +941,66 @@ class MasCacheEmptyStateTruthTests(unittest.TestCase):
         )
 
 
+class MasFolderPickerOpensAtTargetTests(unittest.TestCase):
+    """点某一行的「授权」，选择框必须开在**那一行**的目录上。
+
+    ## 这是用户报出来的
+
+    「如果授权、缓存这些目录什么的，都会指向到同一个目录，而不是点击授权之后
+    对应的目录。」
+
+    根因：`pick_folder(prompt)` 只接收了提示文案，**从没设置
+    `NSOpenPanel.directoryURL`**。于是不管点哪一行的「授权」，面板都开在系统
+    记住的上一个位置（首次是 Documents）—— 点「废纸篓 ~/.Trash」的授权，
+    面板却开在 Documents，用户得自己一层层翻过去，或者 `⌘⇧G` 手输路径。
+
+    六个目标里五个在 `~/Library` 或点号目录（`.npm`/`.cargo`/`.Trash`），
+    默认开在 Documents 意味着**每一次授权都要手动导航**，这是这个版本
+    「授权一次、长期有效」这句话的实际体验里最容易劝退的一步。
+
+    ## 为什么不能用「面板开在目标目录、用户点 Open 选它」这种绕法
+
+    开在目标目录**里面**时，Open 按钮默认是灰的（没有选中任何项）。所以要么
+    开在目标的父目录并预选中该目录，要么开在目标目录里并预选它。前者对
+    `~/Library/Caches` 这种会显示成 `Caches`，后者对 `.npm` 这种点号目录更
+    直接。选后者：面板开在目标目录本身，用户点一下 Open 即可。
+    """
+
+    FFI = ROOT / "src-tauri/src/folder_access_ffi.rs"
+    LIB = ROOT / "src-tauri/src/lib.rs"
+
+    def test_pick_folder_takes_a_starting_directory(self) -> None:
+        source = strip_rust_comments(self.FFI.read_text(encoding="utf-8"))
+        self.assertRegex(
+            source,
+            r"fn pick_folder\(\s*prompt: &str,\s*directory: &std::path::Path",
+            "pick_folder 必须接收起始目录参数",
+        )
+        self.assertIn(
+            "setDirectoryURL:",
+            source,
+            "必须设置 NSOpenPanel.directoryURL，否则面板总开在同一个地方",
+        )
+
+    def test_the_starting_directory_is_the_real_home_plus_the_target(self) -> None:
+        lib = strip_rust_comments(self.LIB.read_text(encoding="utf-8"))
+        self.assertIn(
+            "scanner_home",
+            lib,
+            "起始目录必须用真实 home 拼，不能用 $HOME（沙箱里那是 container）",
+        )
+        self.assertIn("target.relative", lib, "要用该目标在真实 home 下的相对路径")
+
+    def test_hidden_targets_stay_reachable(self) -> None:
+        """`.npm` / `.cargo` / `.Trash` 是点号目录，面板必须能显示隐藏项。
+
+        顺带守住「起始目录指向一个点号目录」这个场景：默认开在 Documents 时
+        用户看不见 `.npm`，开在它自己身上才看得见。
+        """
+        source = strip_rust_comments(self.FFI.read_text(encoding="utf-8"))
+        self.assertIn("setShowsHiddenFiles", source)
+
+
 class MasCleanupHoldsSecurityScopeTests(unittest.TestCase):
     """清理路径必须持有 security scope，否则沙箱里删不动。
 
