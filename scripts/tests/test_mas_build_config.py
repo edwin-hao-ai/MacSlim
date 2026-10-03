@@ -941,6 +941,69 @@ class MasCacheEmptyStateTruthTests(unittest.TestCase):
         )
 
 
+class MasCleanupHoldsSecurityScopeTests(unittest.TestCase):
+    """清理路径必须持有 security scope，否则沙箱里删不动。
+
+    ## 这是怎么发现的
+
+    抓上架截屏时撞出来的：授权 `~/Library/Logs`、界面报 10.50 GB 可释放、
+    按清理、确认，然后
+
+        历史：成功 0 项，失败 1 项，释放 0
+
+    文件一个没少。也就是说 App Store 版**授权后的缓存清理根本不工作** ——
+    而这正是这个版本对外宣称的核心能力。
+
+    ## 根因
+
+    `enter_granted_scopes()` 全项目原本只在 `cache_scanner.rs` 的
+    `spawn_blocking` 里被调用过一次，也就是**只有「扫描」这条路进过作用域**。
+    清理走的是另一条路（`cache_cleaner::remove_directory`），那里从不进作用域，
+    于是 `fs::rename` 与 `remove_dir_all` 都被沙箱拒绝。
+
+    扫描能读、清理不能删 —— 两条路对「授权」的用法不一致，而只有跑一遍完整
+    流程才会发现。
+
+    ## 为什么判据是源码级的
+
+    作用域是否被持有这件事**在单元测试里观察不到**：测试进程不在沙箱里，
+    `startAccessingSecurityScopedResource` 在那里恒真。所以这里守的是
+    「删除路径上必须出现作用域进入」这个结构事实，真正的行为验证靠的是
+    真机跑一遍授权→清理→看文件与历史。
+    """
+
+    CLEANER = ROOT / "src-tauri/src/cache_cleaner.rs"
+
+    def test_the_removal_path_enters_the_granted_scopes(self) -> None:
+        source = strip_rust_comments(self.CLEANER.read_text(encoding="utf-8"))
+        self.assertIn(
+            "enter_granted_scopes",
+            source,
+            "删除路径必须进入已授权作用域，否则沙箱拒绝删除",
+        )
+        # 必须落在删除动作所在的阻塞闭包里，而不是函数体里的某个 await 之前 ——
+        # SecurityScope 里的 NSURL 不是 Send，跨 await 持有会让 future 失去 Send。
+        rename_at = source.index("fs::rename(&path, &trash)")
+        scope_at = source.index("enter_granted_scopes")
+        self.assertLess(
+            scope_at,
+            rename_at,
+            "作用域必须在 rename 之前进入",
+        )
+        self.assertIn(
+            "spawn_blocking",
+            source,
+            "作用域应在阻塞闭包内部进入，避免跨 Send 边界",
+        )
+
+    def test_scanning_still_enters_scopes(self) -> None:
+        """别为了修清理把扫描那条路弄坏 —— 那边本来是对的。"""
+        scanner = strip_rust_comments(
+            (ROOT / "src-tauri/src/cache_scanner.rs").read_text(encoding="utf-8")
+        )
+        self.assertIn("enter_granted_scopes", scanner)
+
+
 class MasNoOffPlatformSteeringTests(unittest.TestCase):
     """App Store 版不得把用户导向站外的「完整版」。
 

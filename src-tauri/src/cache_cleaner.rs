@@ -658,21 +658,39 @@ async fn remove_directory(path: &Path) -> Result<(), UserError> {
     ));
 
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || match std::fs::rename(&path, &trash) {
-        Ok(_) => {
-            std::thread::spawn(move || {
-                let _ = std::fs::remove_dir_all(&trash);
-            });
-            Ok(())
+    tokio::task::spawn_blocking(move || {
+        // 沙箱里删除用户目录**必须持有 security scope**。
+        //
+        // `enter_granted_scopes()` 原本全项目只在 cache_scanner 的
+        // spawn_blocking 里被调用过一次 —— 也就是只有「扫描」这条路进过作用域。
+        // 于是 App Store 版的行为是：扫描能读（报出 10.50 GB 可释放）、清理不能
+        // 删（rename 与 remove_dir_all 都被沙箱拒绝）。实测：
+        //
+        //     历史：成功 0 项，失败 1 项，释放 0
+        //
+        // 用户看到的是「授权了、选中了、确认了，然后什么都没删」。
+        //
+        // 为什么放在这个闭包**内部**：SecurityScope 里是一个 ObjC NSURL，不是
+        // Send，跨 `.await` 持有会让 future 失去 Send，而命令宏要求 Future + Send。
+        // 在阻塞任务里进入、随闭包结束析构，start/stop 依然严格配对，又不碰
+        // Send 边界 —— 与 cache_scanner 里那段是同一个理由。
+        let _granted_scopes = crate::folder_access::enter_granted_scopes();
+        match std::fs::rename(&path, &trash) {
+            Ok(_) => {
+                std::thread::spawn(move || {
+                    let _ = std::fs::remove_dir_all(&trash);
+                });
+                Ok(())
+            }
+            Err(_) => std::fs::remove_dir_all(&path).map_err(|e| {
+                UserError::one(
+                    ErrorCode::DELETE_FAILED,
+                    format!("删除失败: {e}"),
+                    "reason",
+                    e,
+                )
+            }),
         }
-        Err(_) => std::fs::remove_dir_all(&path).map_err(|e| {
-            UserError::one(
-                ErrorCode::DELETE_FAILED,
-                format!("删除失败: {e}"),
-                "reason",
-                e,
-            )
-        }),
     })
     .await
     .map_err(|e| {
