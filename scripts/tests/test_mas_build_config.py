@@ -941,6 +941,127 @@ class MasCacheEmptyStateTruthTests(unittest.TestCase):
         )
 
 
+class MasNoOffPlatformSteeringTests(unittest.TestCase):
+    """App Store 版不得把用户导向站外的「完整版」。
+
+    ## 为什么这是最可能被拒的一条
+
+    原先 `FdaCard.tsx` 在 MAS 构建里渲染一个 **`btn-primary` 主按钮**
+    「获取完整版（支持完整缓存与开发缓存清理）」，点开 `https://vgoapp.com`。
+    三重叠加，审核看到的就是「这个 App Store 版是残废的，去我们官网下真的那个」：
+
+    - 用主按钮样式 —— 设置页上最扎眼的元素
+    - 形态上就是导流：App Store 版 → 外部网站 → 下载同款完整版
+    - 指南 **4.0** 把「功能太少」列为下架原因第一位，**2.1** 会把自认残缺的
+      构建当成不完整；再加一条导流
+
+    「免费版 + 官网下完整版」被拒是行业里反复发生的事，因为它同时踩中这三条。
+
+    ## 删掉它不损失任何诚实
+
+    `settings.fda.sandboxed` 那段本来就如实列出生效的四项能力
+    （进程监控、系统健康、应用体积分析、应用卸载不受影响），并说明「这是平台
+    限制，授权也解决不了」。**诚实陈述和导流是两件事**，原先混在一起了。
+
+    所以判据只拦「去别处拿」这个动作，不拦「这里做不到」这个事实。
+    """
+
+    # 「去别处拿」的措辞。中英都要拦：只拦中文等于英文版照样被导流。
+    FORBIDDEN = (
+        "获取完整版",
+        "请用 Developer ID 版",
+        "或改用完整版",
+        "use the full edition",
+        "Use the Developer ID build",
+        "Get the full edition",
+    )
+    DICTIONARIES = (ROOT / "src/i18n/zh-CN.ts", ROOT / "src/i18n/en.ts")
+    COMPONENTS = (ROOT / "src/components/FdaCard.tsx", ROOT / "src/views/ProcessView.tsx")
+
+    def test_no_user_facing_string_points_at_another_edition(self) -> None:
+        """扫的是**代码**，注释不算。
+
+        不剥注释的话，这条门禁会先被开发者自己的解释性注释挡下 ——
+        而那些注释恰恰应该保留：删掉导流按钮的理由必须留在原地，
+        否则过几个月有人会「补回一个更温和的升级入口」。
+        """
+        for path in (*self.DICTIONARIES, *self.COMPONENTS):
+            text = strip_tsx_comments(path.read_text(encoding="utf-8"))
+            for phrase in self.FORBIDDEN:
+                self.assertNotIn(
+                    phrase,
+                    text,
+                    f"{path.name} 仍出现「{phrase}」—— 在 App Store 里把用户导向站外完整版"
+                    "是最可能被拒的一条（指南 2.1 / 4.0 + 导流）",
+                )
+
+    def test_there_is_no_external_link_left_in_the_frontend(self) -> None:
+        """整个前端只允许营销页那种固定链接，且必须在 MAS 构建里不可达。
+
+        实测原先全前端只有一处站外链接，就是那个导流按钮。
+        """
+        offenders = []
+        for path in ROOT.joinpath("src").rglob("*.tsx"):
+            if ".test." in path.name:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if 'href="http' in text or 'target="_blank"' in text:
+                offenders.append(path.name)
+        self.assertEqual(
+            offenders,
+            [],
+            f"这些文件里还有站外链接：{offenders}。App Store 版里的每一个都要有明确理由",
+        )
+
+    def test_the_honest_scope_statement_stays(self) -> None:
+        """删掉的必须是导流，不是诚实。
+
+        `settings.fda.sandboxed` 那段是化解审核疑虑的关键：它说明这是平台
+        限制，并逐项列出不受影响的能力。少了它，剩下的话就成了「功能太少」
+        的自认。
+        """
+        for path in self.DICTIONARIES:
+            keys = _flatten_dict(load_ts_dict(path))
+            self.assertIn("settings.fda.sandboxed", keys, f"{path.name} 缺 sandboxed 说明")
+        zh = load_ts_dict(ROOT / "src/i18n/zh-CN.ts")
+        self.assertIn(
+            "不受影响",
+            zh["settings"]["fda"]["sandboxed"],
+            "sandboxed 说明必须继续列出哪些能力不受影响",
+        )
+
+    def test_the_terminate_limitation_is_still_stated(self) -> None:
+        """「终止不了进程」这个事实要留着，只是不要再指路。"""
+        zh = load_ts_dict(ROOT / "src/i18n/zh-CN.ts")
+        self.assertIn("无法终止", zh["process"]["masTerminateUnsupported"])
+        self.assertIn(
+            "这一页仍可用来查看",
+            zh["process"]["masTerminateUnsupported"],
+            "要留下这一页能做什么，而不是只说不能做什么",
+        )
+
+    def test_the_store_description_does_not_advertise_the_other_edition(self) -> None:
+        """上架描述末句原本是「两个版本……官网提供完整版」。
+
+        那是给每位用户看、审核逐字读的文案 —— 等于在商店页面里公开导流，
+        比应用内的那个按钮更严重。改成陈述沙箱边界与「其余功能不受影响」，
+        诚实度不降反升。
+        """
+        source = (ROOT / "scripts/publish_mas_metadata.py").read_text(encoding="utf-8")
+        for phrase in ("官网提供完整版", "两个版本", "Two editions", "完整版"):
+            self.assertNotIn(
+                phrase, source, f"上架描述里仍出现「{phrase}」—— 公开导流"
+            )
+
+    def test_the_description_still_declares_the_scope_honestly(self) -> None:
+        source = (ROOT / "scripts/publish_mas_metadata.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "进程监控",
+            source,
+            "描述仍要写明这个版本提供什么（诚实陈述范围，不是导流）",
+        )
+
+
 class ScreenshotStoryTests(unittest.TestCase):
     """五拍故事线：文案要齐、两种语言要对得上、叠字不许盖住侧栏。
 

@@ -105,8 +105,8 @@ App Store 版运行在 macOS 的系统沙箱里，出于平台限制**无法**�
 全部在本机完成
 没有账号、没有统计、没有广告、没有第三方 SDK。清理历史与白名单只存在你自己的机器上，删除应用即一并删除。
 
-两个版本
-App Store 版提供系统监控、进程监控、应用分析与授权后的缓存清理，更新由 App Store 负责。如果还需要终止进程、Docker 清理、端口占用，以及无需逐个授权的缓存清理，官网提供完整版。""",
+关于沙箱
+MacSlim 运行在 macOS 的系统沙箱里，因此有两件事它做不到：终止其他进程，以及读取你未授权的目录。这是平台限制，上面列出的每一项功能都不受影响。""",
     "keywords": "mac清理,缓存,磁盘空间,内存,进程监控,应用卸载,xcode,npm缓存,系统监控",
     "whats_new": "首个版本。\n\n· 系统健康实时读数\n· 进程监控（只读）\n· 应用体积分析与卸载\n· 缓存清理：授权一次，长期有效",
     "support_url": SUPPORT_URL,
@@ -150,8 +150,8 @@ Every item is labelled with its size and its risk. Only items that cost less tha
 Entirely on your Mac
 No account, no analytics, no ads, no third-party SDKs. Cleanup history and your whitelist never leave your machine, and deleting the app deletes them.
 
-Two editions
-The App Store edition covers system health, process monitoring, app analysis, and cache cleaning for the folders you authorize, with updates handled by the App Store. If you also need process termination, Docker cleanup, port usage, and cache cleaning without per-folder authorization, the full edition is available on our website.""",
+About the sandbox
+MacSlim runs inside the macOS system sandbox, which means two things it cannot do: terminate other apps, and read folders you have not authorized. That is a platform limit, and everything listed above is unaffected.""",
     "keywords": "mac cleaner,cache,disk space,memory,process monitor,uninstaller,xcode,npm cache",
     "whats_new": "First release.\n\n· Live system health\n· Process monitoring (read-only)\n· App size analysis and uninstaller\n· Cache cleaning: authorize once, valid for good",
     "support_url": SUPPORT_URL,

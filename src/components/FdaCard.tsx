@@ -111,18 +111,19 @@ export default function FdaCard() {
             {t(reasonKey())}
           </div>
 
-          <Show when={sandboxed() && !granted()}>
-            <div class="mt-3">
-              <a
-                class="btn-primary inline-block"
-                href="https://vgoapp.com"
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                {t("settings.fda.getFullVersion")}
-              </a>
-            </div>
-          </Show>
+          {/* 这里原来有一个 btn-primary 主按钮「获取完整版」，点开 vgoapp.com。
+
+              删掉它的理由不是「怕审核」，而是它同时踩中三条：设置页最
+              扎眼的元素 + 形态上就是从 App Store 版导向站外下同款完整版 +
+              原文案还自认「功能太少」（指南 4.0 的下架原因第一位、
+              2.1 的不完整）。
+
+              而删掉它**不损失任何诚实**：上面那段 sandboxed 说明已经把边界
+              讲清了 —— 这是平台限制、授权也解决不了，并且逐项列出不受影响
+              的四项能力。诚实陈述与导流是两件事，原先混在一起了。
+
+              刻意不把它换成任何形式的「升级 / 了解更多」入口：换个措辞
+              仍然是导流，而审核看的是行为不是用词。*/}
 
           <Show when={!granted() && !sandboxed()}>
             <div class="mt-3 flex flex-wrap items-center gap-2">

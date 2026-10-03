@@ -105,7 +105,7 @@ export const zhCN = {
     terminateSelected: "终止已选 ({count})",
     protectedHint: "受保护项只能强制终止，勾选后会弹窗确认",
     masTerminateUnsupported:
-      "App Store 版运行在系统沙箱内，无法终止其他进程。需要终止功能请用 Developer ID 版；这一页仍可用来查看内存与 CPU 占用。",
+      "App Store 版运行在系统沙箱内，无法终止其他进程。这一页仍可用来查看每个进程的内存与 CPU 占用。",
     whitelistLocked: "白名单进程不会被终止",
     failedTitle: "以下进程未能终止：",
     confirmProtectedTitle: "确认强制终止受保护进程？",
@@ -237,7 +237,7 @@ export const zhCN = {
     app_no_terminable_process: "应用 {app} 没有可终止的进程，请重新扫描",
     app_selected_twice: "同一应用被重复选择",
     app_selection_count_mismatch: "应用选择 key 数量与快照不一致",
-    folder_access_panel_failed: "无法打开目录选择框，请在系统设置里检查 macOS 的自动化权限，或改用完整版。",
+    folder_access_panel_failed: "无法打开目录选择框，请在系统设置里检查 macOS 的自动化权限。",
     folder_access_bookmark_failed: "无法为所选目录创建访问凭证，可能该目录已被移动或删除。",
     folder_access_store_failed: "保存授权失败，请重试。",
     authorization_cancelled: "用户取消了授权",
@@ -296,7 +296,7 @@ export const zhCN = {
     process_pid_reused: "PID {pid} 已被其他进程复用，请重新扫描",
     process_plan_requires_blocking: "进程操作必须通过阻塞执行通道",
     process_protection_changed: "进程保护状态已变化（PID {pid}），请重新扫描",
-    process_termination_unsupported: "App Store 版受系统沙箱限制，无法终止其他进程。请用 Developer ID 版，或在应用内清理缓存与应用残留。",
+    process_termination_unsupported: "App Store 版受系统沙箱限制，无法终止其他进程。缓存清理与应用卸载不受影响。",
     protected_force_only: "受保护进程只能强制终止",
     random_id_failed: "生成随机 ID 失败",
     refuse_symlink: "拒绝清理符号链接：{reason}",
@@ -544,7 +544,6 @@ export const zhCN = {
       // 「功能太少」列为下架原因第一位，而用户看到这种自我标注也会觉得被骗。
       sandboxed:
         "App Store 版运行在系统沙箱里，读不到你的用户缓存目录 —— 这是平台限制，授权也解决不了。进程监控、系统健康、应用体积分析、应用卸载不受影响。",
-      getFullVersion: "获取完整版（支持完整缓存与开发缓存清理）",
     },
     general: "通用设置",
     generalDesc: "基础行为开关",

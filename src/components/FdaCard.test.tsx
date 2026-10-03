@@ -143,13 +143,25 @@ describe("FdaCard 在 MAS 版的行为", () => {
     expect(screen.queryByText("settings.fda.needUserCache")).toBeNull();
   });
 
-  it("给出引流到完整版的入口 —— 用户要完整能力有明确去处", async () => {
+  it("沙箱形态下不给任何站外入口 —— 只陈述边界，不导流", async () => {
+    // 这条用例的上一版断言的是「有链接、指向 vgoapp.com」，也就是把导流
+    // 写成了期望行为。现在反过来：App Store 版里不允许出现任何站外链接
+    // 或升级入口。
+    //
+    // 判据不是「文案温和」，而是**结构上没有可点的去处** —— 换个措辞
+    // 仍然是导流，而审核看的是行为。
     getFdaStatus.mockResolvedValue(MAS_REDIRECTED);
-    render(() => <FdaCard />);
-    const link = await screen.findByRole("link", {
-      name: "settings.fda.getFullVersion",
-    });
-    expect(link.getAttribute("href")).toContain("vgoapp.com");
+    const { container } = render(() => <FdaCard />);
+    await screen.findByText("settings.fda.sandboxed");
+
+    expect(container.querySelectorAll("a").length).toBe(0);
+    expect(
+      screen.queryByRole("link", { name: "settings.fda.getFullVersion" }),
+    ).toBeNull();
+    // 也不能有 button 形态的升级入口
+    expect(
+      screen.queryByRole("button", { name: "settings.fda.getFullVersion" }),
+    ).toBeNull();
     expect(openFullDiskAccessSettings).not.toHaveBeenCalled();
   });
 
@@ -157,8 +169,6 @@ describe("FdaCard 在 MAS 版的行为", () => {
     getFdaStatus.mockResolvedValue(DEV_OK);
     render(() => <FdaCard />);
     expect(await screen.findByText("settings.fda.granted")).toBeTruthy();
-    expect(
-      screen.queryByRole("link", { name: "settings.fda.getFullVersion" }),
-    ).toBeNull();
+    expect(document.querySelectorAll("a").length).toBe(0);
   });
 });

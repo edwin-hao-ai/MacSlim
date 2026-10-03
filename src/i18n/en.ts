@@ -101,7 +101,7 @@ export const en: Dict = {
     terminateSelected: "Terminate selected ({count})",
     protectedHint: "Protected rows can only be force-terminated (with confirmation)",
     masTerminateUnsupported:
-      "The App Store build runs in the system sandbox and cannot terminate other apps. Use the Developer ID build for that; this page still shows memory and CPU usage.",
+      "The App Store build runs in the system sandbox and cannot terminate other apps. This page still shows per-process memory and CPU usage.",
     whitelistLocked: "Whitelisted processes are never terminated",
     failedTitle: "These processes could not be terminated:",
     confirmProtectedTitle: "Force-terminate protected processes?",
@@ -244,7 +244,7 @@ export const en: Dict = {
     app_selection_count_mismatch:
       "The app selection key count does not match the snapshot",
     folder_access_panel_failed:
-      "Could not open the folder picker. Check macOS automation permissions in System Settings, or use the full edition.",
+      "Could not open the folder picker. Check macOS automation permissions in System Settings.",
     folder_access_bookmark_failed:
       "Could not create an access credential for the selected folder. It may have been moved or deleted.",
     folder_access_store_failed: "Could not save the folder authorization. Please try again.",
@@ -322,7 +322,7 @@ export const en: Dict = {
     process_plan_requires_blocking:
       "Process plans must run on the blocking channel",
       process_termination_unsupported:
-        "The App Store build runs in the system sandbox and cannot terminate other apps. Use the Developer ID build, or clean caches and app leftovers inside the app.",
+        "The App Store build runs in the system sandbox and cannot terminate other apps. Cache cleaning and app uninstall are unaffected.",
     process_protection_changed:
       "The protection state changed (PID {pid}) — rescan",
     protected_force_only: "Protected processes can only be force-terminated",
@@ -605,7 +605,6 @@ export const en: Dict = {
       // removal reason, and users read a self-applied label as a bait.
       sandboxed:
         "The App Store edition runs inside the system sandbox and cannot read your user cache folders. That is a platform limit — granting access does not change it. Process monitoring, system health, app size analysis and uninstall are unaffected.",
-      getFullVersion: "Get the full edition (full cache & developer cache cleaning)",
     },
     general: "General",
     generalDesc: "Behavior toggles",
