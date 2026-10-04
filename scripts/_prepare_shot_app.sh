@@ -78,14 +78,25 @@ DEV_PROFILE="${MAS_DEV_PROFILE:-$HOME/.cargo/shared-target-mas/MacSlim-dev.provi
 [ -f "$DEV_PROFILE" ] || "$ROOT/scripts/create_screenshot_dev_profile.py"
 
 # 签名要跟 profile 里那张证书一致，否则设备/证书不匹配会被拒。
+#
+# `-noout` 不是可选的洁癖：不给它，openssl 会连同完整 PEM 一起打到 stdout，
+# 于是 DEV_CERT_SHA 变成「指纹 + 一整段证书」的多行字符串。codesign 拿到这个
+# 垃圾身份会失败，而失败被 `>/dev/null 2>&1` 吞掉 → 副本仍是 release-mas.sh
+# 留下的 MAS 签名，但 profile 已经被换成 Development 的 → taskgated 报
+# 「Unsatisfied entitlements」把 app 杀掉。整个链条静默，最难查的就是这一处。
 DEV_CERT_SHA="$(python3 - "$DEV_PROFILE" <<'PY'
 import plistlib, subprocess, sys
 der = plistlib.loads(subprocess.run(
     ["security", "cms", "-D", "-i", sys.argv[1]], capture_output=True
 ).stdout)["DeveloperCertificates"][0]
-print(subprocess.run(["openssl", "x509", "-inform", "DER", "-fingerprint", "-sha1"],
-                     input=der, capture_output=True).stdout.decode()
-      .strip().split("=")[1].replace(":", ""))
+out = subprocess.run(
+    ["openssl", "x509", "-inform", "DER", "-noout", "-fingerprint", "-sha1"],
+    input=der, capture_output=True, check=True,
+).stdout.decode()
+fingerprint = out.strip().split("=", 1)[1].strip()
+if not fingerprint or len(fingerprint.replace(":", "")) != 40:
+    raise SystemExit(f"没拿到合法的证书 SHA1 指纹：{out!r}")
+print(fingerprint.replace(":", ""))
 PY
 )"
 
@@ -110,14 +121,45 @@ rm -rf "$SHOT_APP"
 cp -R "$APP" "$SHOT_APP"
 # 换成 Development profile：生产那份留着会被 taskgated 判为「不适用」。
 cp "$DEV_PROFILE" "$SHOT_APP/Contents/embedded.provisionprofile"
-codesign --force --deep --sign "$DEV_CERT_SHA" \
+
+# 重签失败必须在这里就炸出来。`codesign -v` 兜不住：签名本来就是完整的
+# （MAS 那份），只是证书身份错了，它照样校验通过 —— 于是失败被推迟到启动时
+# 才变成「app 启动 9 秒后被杀」，跟签名八竿子打不着。
+if ! codesign --force --deep --sign "$DEV_CERT_SHA" \
   --entitlements "$ENTITLEMENTS_TMP" \
-  "$SHOT_APP" >/dev/null 2>&1
+  "$SHOT_APP"; then
+  rm -f "$ENTITLEMENTS_TMP"
+  echo "错误: 用 Development 证书（${DEV_CERT_SHA}）重签失败" >&2
+  exit 1
+fi
 rm -f "$ENTITLEMENTS_TMP"
 
-codesign -v "$SHOT_APP" >/dev/null 2>&1 || {
-  echo "错误: 截图副本重签失败，app 起来必然是白屏" >&2
-  exit 1
-}
+# 再确认签出来的确实是这把证书带的身份字段，而不是碰巧保留了 MAS 签名。
+# 判据选「签名里的 keychain-access-groups 与 profile 一致」：这正是
+# taskgated 报 Unsatisfied entitlements 时逐条比的东西，也是唯一能提前
+# 抓住「重签没生效」的读回方式。
+python3 - "$SHOT_APP" "$DEV_PROFILE" <<'PY'
+import plistlib, subprocess, sys
+
+app, profile = sys.argv[1], sys.argv[2]
+raw = subprocess.run(["codesign", "-d", "--entitlements", "-", "--xml", app],
+                     capture_output=True).stdout
+signed = plistlib.loads(raw[raw.find(b"<?xml"):])
+prof = plistlib.loads(subprocess.run(
+    ["security", "cms", "-D", "-i", profile], capture_output=True
+).stdout)["Entitlements"]
+
+for key in ("com.apple.application-identifier",
+            "com.apple.developer.team-identifier",
+            "keychain-access-groups"):
+    if signed.get(key) != prof.get(key):
+        raise SystemExit(
+            f"签名与 profile 对不上：{key} 签名={signed.get(key)!r} "
+            f"profile={prof.get(key)!r}。重签多半没生效。"
+        )
+if not signed.get("com.apple.security.app-sandbox"):
+    raise SystemExit("签名里没有 app-sandbox —— 截图会拍到无沙箱行为，不能用")
+print("  签名自检通过：Development 证书 + 沙箱 + 与 profile 一致的身份字段")
+PY
 
 echo "截图副本就绪: ${SHOT_APP}（view=${VIEW} locale=${LOCALE} 全屏，沙箱 + Development profile）"
