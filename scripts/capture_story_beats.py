@@ -234,16 +234,29 @@ def db_history() -> list[tuple]:
         con.close()
 
 
+# 「0 B」本身也是 teal 大字 —— 实测空态这张图在该区域有 430 个 teal 像素。
+# 所以判据不能是「>0」，否则第一拍永远通不过（曾经就是这样：截图拍得完全正确，
+# 却被自己的校验判成「出现了可释放空间」）。真实数值（10.50 GB）字形数是
+# 「0 B」的三四倍，落在 1200 以上。
+MIN_DATA_TEAL = 1200
+
+
 def reclaimable_bytes(image: Image.Image) -> int:
-    """「可释放空间」那一大片 teal 大字的像素面积，>0 即代表有数据。
+    """「可释放空间」那一大片 teal 大字的像素面积。
 
     只判「有没有」，不判具体数值 —— 具体数值由 fixture 体积决定，而那是
-    我们自己造的，用不着从像素里反推。
+    我们自己造的，用不着从像素里反推。返回值会打进日志：阈值万一再偏，
+    至少能一眼看出是判据错了还是界面变了。
     """
     px = image.load()
-    count = sum(1 for y in range(900, 1250, 2) for x in range(2300, CANVAS[0], 2)
-                if is_teal(*px[x, y]))
-    return count
+    return sum(1 for y in range(900, 1250, 2) for x in range(2300, CANVAS[0], 2)
+               if is_teal(*px[x, y]))
+
+
+def has_data(image: Image.Image) -> bool:
+    count = reclaimable_bytes(image)
+    print(f"    （可释放区域 teal 像素 {count}，阈值 {MIN_DATA_TEAL}）", flush=True)
+    return count > MIN_DATA_TEAL
 
 
 def reset_grants() -> None:
@@ -311,7 +324,7 @@ def wait_for_reclaimable(image_png: Path, want_data: bool, timeout: int = 40) ->
     image = capture(image_png)
     while time.time() < deadline:
         image = capture(image_png)
-        has = reclaimable_bytes(image) > 0
+        has = has_data(image)
         if has == want_data:
             return image
         time.sleep(3)
@@ -368,7 +381,7 @@ def shoot_ungranted(out: Path) -> None:
     time.sleep(16)
     activate()
     shot = capture(out / "01-authorized.png")
-    if reclaimable_bytes(shot) > 0:
+    if has_data(shot):
         fail("第一拍应该拍到未授权的空态，却出现了可释放空间")
     say("01-authorized：未授权空态")
 
@@ -379,7 +392,7 @@ def shoot_granted(out: Path, probe: Path) -> None:
     print("  授权中…")
     do_grant(probe)
     image = wait_for_reclaimable(probe, want_data=True, timeout=45)
-    if reclaimable_bytes(image) == 0:
+    if not has_data(image):
         fail("授权之后仍扫不到 fixture —— 授权或扫描有问题")
     say("授权生效，扫到 fixture")
     capture(out / "02-scanned.png")
