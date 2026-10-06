@@ -184,48 +184,47 @@ install_privacy_manifest() {
 # （`local` 之前就引用了未声明的变量），所以没人看到过它。
 sign_entitlements() {
   local out="${CARGO_TARGET_DIR}/MacSlim-entitlements.plist"
-  local decoded="$CARGO_TARGET_DIR/MacSlim-profile.plist"
+  local decoded="${CARGO_TARGET_DIR}/MacSlim-profile.plist"
 
   # profile 是 CMS 签名包，先解出明文 plist。
   security cms -D -i "$PROFILE" > "$decoded" 2>/dev/null || true
   [ -s "$decoded" ] || fail "无法解出 profile：$PROFILE"
 
-  # entitlement 的名字里带点号（com.apple.developer.team-identifier）。
-  # `plutil -extract` 把点当键路径分隔符，必须转义成 `\.`；PlistBuddy 不按点
-  # 分割，用它更省心。这里用 PlistBuddy，读数组也顺带能拿到。
-  local team app_id
-  team="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.developer.team-identifier" "$decoded")"
-  app_id="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.application-identifier" "$decoded")"
-  [ -n "$team" ] && [ -n "$app_id" ] || fail "profile 里读不到身份字段：$PROFILE"
+  # 整份合并交给 plistlib，不手工拼 PlistBuddy 命令。
+  #
+  # 为什么不再用 PlistBuddy 逐条搬：它 `Print` 出来的是**人读格式**
+  # （`key = ( a, b )` 跨多行），不是能直接消费的 JSON/OLD plist。原来那段
+  # `tr ',' '\n'` 在这个格式上完全不起作用——数组里本来就没有逗号，于是
+  # `for value in $raw` 拆出来的是 `keychain-access-groups`、`=`、`(` 这些
+  # 垃圾词，`Add` 全部失败又被 `|| true` 吞掉，结果是一份**空数组**。
+  #
+  # 空数组不会让签名校验失败，所以自查全绿、altool 也照样收，缺陷一路溜到
+  # 运行时：签名要 `keychain-access-groups = []`，profile 给的是
+  # `5XNDF727Y6.*`，taskgated 报 Unsatisfied entitlements 直接把 app 杀掉。
+  python3 - "$ENTITLEMENTS" "$decoded" "$out" <<'PY'
+import plistlib, sys
 
-  # 沙箱权限那份做底，再补上身份字段
-  cp "$ENTITLEMENTS" "$out"
-  local fields=(
-    "com.apple.application-identifier|$app_id"
-    "com.apple.developer.team-identifier|$team"
-  )
-  local entry key value
-  for entry in "${fields[@]}"; do
-    key="${entry%%|*}"
-    value="${entry#*|}"
-    /usr/libexec/PlistBuddy -c "Delete :$key" "$out" 2>/dev/null || true
-    /usr/libexec/PlistBuddy -c "Add :$key string $value" "$out"
-  done
+base = plistlib.loads(open(sys.argv[1], "rb").read())
+profile = plistlib.loads(open(sys.argv[2], "rb").read())["Entitlements"]
 
-  # keychain-access-groups 是数组，逐项搬
-  /usr/libexec/PlistBuddy -c "Delete :keychain-access-groups" "$out" 2>/dev/null || true
-  /usr/libexec/PlistBuddy -c "Add :keychain-access-groups array" "$out"
-  local raw index=1
-  raw="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:keychain-access-groups" "$decoded" \
-    | tr -d '{}' | tr ',' '\n' | sed 's/^ *//;s/ *$//')"
-  for value in $raw; do
-    [ -n "$value" ] || continue
-    /usr/libexec/PlistBuddy -c "Add :keychain-access-groups:-$index string $value" "$out" || true
-    index=$((index + 1))
-  done
+for key in ("com.apple.application-identifier",
+            "com.apple.developer.team-identifier",
+            "keychain-access-groups"):
+    if key not in profile:
+        raise SystemExit(f"profile 里没有 {key}，拒绝签一份对不上的包")
+    base[key] = profile[key]
+
+# 空数组是最容易被忽略、后果又最直接的一种错：签名与 profile 不匹配，
+# app 启动即被杀。这里当场挡住，而不是等 taskgated 报一个看不出所以然的错。
+if not base["keychain-access-groups"]:
+    raise SystemExit("合并后 keychain-access-groups 是空数组，签名会与 profile 不匹配")
+
+open(sys.argv[3], "wb").write(plistlib.dumps(base))
+PY
 
   echo "$out"
 }
+
 
 sign() {
   info "签名（App Store 证书 + 沙箱 entitlements + profile）"

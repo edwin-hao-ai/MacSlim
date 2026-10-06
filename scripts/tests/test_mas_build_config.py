@@ -578,17 +578,34 @@ class MasSigningTests(unittest.TestCase):
             "upload() 里 local ENV_PATH 出现在第一次使用它之后",
         )
 
-    def test_profile_fields_are_read_with_plistbuddy_not_plutil(self) -> None:
-        # entitlement 名里带点号，而 plutil 的 -extract 会把点当键路径分隔符，
-        # 于是读出来是空 → 合并出一份没有身份字段的签名 → 又是 90886。
+    def test_profile_fields_are_merged_by_key_not_by_text_parsing(self) -> None:
+        # 合并必须**按键**从 profile 里取，不能去解析 PlistBuddy 的人读输出。
         #
-        # 只看代码不看注释：这段的注释里**要**写清「为什么不用 plutil」，
-        # 把注释一起判会让正确的说明反过来把门禁弄挂。
+        # 踩过的坑：PlistBuddy `Print` 出来是 `key = ( a, b )` 跨多行，里面
+        # **没有逗号**，于是 `tr ',' '\n'` 完全没起作用，`for value in $raw`
+        # 拆出来的是 `keychain-access-groups`、`=`、`(` 这些垃圾词，`Add` 全部
+        # 失败又被 `|| true` 吞掉 → 合并出一份**空数组**。
+        #
+        # 空数组不会让签名校验失败，所以自查全绿、altool 也照样收，一路溜到
+        # 运行时：签名要 `keychain-access-groups = []` 而 profile 给的是
+        # `5XNDF727Y6.*`，taskgated 报 Unsatisfied entitlements 直接杀进程。
+        #
+        # 只看代码不看注释：注释里**要**写清「为什么不用 plutil」，把注释一起
+        # 判会让正确的说明反过来把门禁弄挂。
         body = strip_shell_comments(
             self.script.split("sign_entitlements() {", 1)[1].split("\n}\n", 1)[0]
         )
-        self.assertIn("PlistBuddy", body)
         self.assertNotIn("plutil -extract", body)
+        # 按键取，而不是拼命令去改 plist
+        self.assertIn("plistlib.loads", body)
+        for key in (
+            "com.apple.application-identifier",
+            "com.apple.developer.team-identifier",
+            "keychain-access-groups",
+        ):
+            self.assertIn(key, body)
+        # 空数组必须当场拒绝，不能带着它去签名
+        self.assertIn('if not base["keychain-access-groups"]', body)
 
 
 class MasDeadUiTests(unittest.TestCase):
