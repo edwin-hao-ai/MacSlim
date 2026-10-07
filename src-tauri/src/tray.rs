@@ -83,9 +83,27 @@ pub fn init_tray(app: &AppHandle) -> tauri::Result<()> {
     // 动态状态区（只读项，靠 monitor 线程刷新）
     let health_header =
         MenuItem::with_id(app, "health_header", l.health_header, false, None::<&str>)?;
-    let cpu_item = MenuItem::with_id(app, "cpu_item", format!("  {}:    —", l.cpu), false, None::<&str>)?;
-    let mem_item = MenuItem::with_id(app, "mem_item", format!("  {}:   —", l.mem), false, None::<&str>)?;
-    let disk_item = MenuItem::with_id(app, "disk_item", format!("  {}:   —", l.disk), false, None::<&str>)?;
+    let cpu_item = MenuItem::with_id(
+        app,
+        "cpu_item",
+        format!("  {}:    —", l.cpu),
+        false,
+        None::<&str>,
+    )?;
+    let mem_item = MenuItem::with_id(
+        app,
+        "mem_item",
+        format!("  {}:   —", l.mem),
+        false,
+        None::<&str>,
+    )?;
+    let disk_item = MenuItem::with_id(
+        app,
+        "disk_item",
+        format!("  {}:   —", l.disk),
+        false,
+        None::<&str>,
+    )?;
 
     // 操作区
     let open_item = MenuItem::with_id(app, "open", l.open, true, None::<&str>)?;

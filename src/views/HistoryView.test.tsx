@@ -24,7 +24,12 @@ vi.mock("@/i18n", async (importOriginal) => {
   const { fakeI18n } = await import("@/i18n/fake-i18n");
   // 上下文在工厂里建好（不是每次调用时）：`useI18n()` 必须同步返回对象，
   // 返回 Promise 会让组件里的 `t(...)` 直接炸。
-  const ctx = fakeI18n({ t: lookup });
+  // 必须走真实的 `interpolate`：直接返回词条会让带参数的文案渲染成
+  // 字面量 `{count} 项缓存`，测试就测不出「计数有没有被填进去」。
+  const ctx = fakeI18n({
+    t: (key: string, params?: Record<string, string | number>) =>
+      actual.interpolate(lookup(key), params),
+  });
   return { ...actual, useI18n: () => ctx };
 });
 
@@ -40,6 +45,10 @@ type HistoryRow = {
   freed_bytes: number;
   success: boolean;
   detail: string;
+  item_count: number;
+  ok_count: number;
+  fail_count: number;
+  reason_code: string;
 };
 
 const row = (id: number, operation: string): HistoryRow => ({
@@ -50,6 +59,12 @@ const row = (id: number, operation: string): HistoryRow => ({
   freed_bytes: 0,
   success: true,
   detail: "详情",
+  // 默认给 0：表示「旧数据」，渲染时回退到 target/detail。
+  // 本地化那条路径由专门的用例覆盖。
+  item_count: 0,
+  ok_count: 0,
+  fail_count: 0,
+  reason_code: "",
 });
 
 const OPERATIONS = [
@@ -116,6 +131,39 @@ describe("HistoryView operation labels", () => {
     );
     expect(view.container.textContent).not.toContain("app_graceful_quit");
     expect(view.container.textContent).not.toContain(zhCN.history.opAppTerminate);
+  });
+
+  it("用结构化计数渲染本地化文本，而不是后端拼好的中文", async () => {
+    // 英文界面此前整页显示中文（「3 项缓存」「成功 2 项，失败 1 项」）——
+    // 历史是这个产品「可追溯」的核心页面，不该只有中文。
+    mocks.getHistory.mockResolvedValue([
+      {
+        ...row(1, "cache"),
+        item_count: 3,
+        ok_count: 2,
+        fail_count: 1,
+        reason_code: "delete_failed",
+      },
+    ]);
+    render(() => <HistoryView active />);
+    // 本文件的 i18n mock 固定走 zh 词典，所以断言的是 zh 词条；
+    // 关键是它**来自结构化计数**（3 项 / 2 成功 1 失败），而不是后端
+    // 拼好的 `target`（"目标 1"）与 `detail`（"详情"）。
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("3 项缓存"),
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("成功 2 项，失败 1 项");
+    expect(text).not.toContain("目标 1");
+    expect(text).not.toContain("详情");
+  });
+
+  it("旧数据（计数为 0）回退到后端原文，不猜", async () => {
+    mocks.getHistory.mockResolvedValue([row(7, "cache")]);
+    render(() => <HistoryView active />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("目标 7"),
+    );
   });
 
   it("reloads every time the view becomes active", async () => {

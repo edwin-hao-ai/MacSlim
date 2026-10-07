@@ -691,10 +691,18 @@ export type HistoryEntry = {
   id: number;
   timestamp: string;
   operation: string;
+  /** 拼好的中文文本，旧数据与兜底用；界面优先用下面的结构化字段。 */
   target: string;
   freed_bytes: number;
   success: boolean;
+  /** 同上，中文文本兜底。 */
   detail: string;
+  /** 结构化计数：界面据此本地化渲染。旧数据为 0，此时回退到 target/detail。 */
+  item_count: number;
+  ok_count: number;
+  fail_count: number;
+  /** 失败原因的错误码（`error.<code>` 词条）；空串表示无。 */
+  reason_code: string;
 };
 
 export async function getHistory(limit = 200): Promise<HistoryEntry[]> {

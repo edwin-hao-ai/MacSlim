@@ -53,6 +53,40 @@ const HistoryView: Component<{ active?: boolean }> = (props) => {
     }
   };
 
+  /**
+   * 本地化渲染 target / detail。
+   *
+   * 后端现在同时下发「拼好的中文」（`target`/`detail`）与结构化计数
+   * （`item_count`/`ok_count`/`fail_count`/`reason_code`）。这里优先用结构化的
+   * 那份拼出当前语言 —— 历史页此前在英文界面里整页显示中文（「3 项缓存」
+   * 「成功 2 项，失败 1 项，释放 1.2 GB」），而「每步操作有记录、可追溯」
+   * 正是这个产品对用户的核心承诺，英文用户不该看到一个中文的历史页。
+   *
+   * `item_count === 0` 表示这条是旧数据（新列默认 0），此时回退到原始文本，
+   * 不做猜测。
+   */
+  const targetText = (e: HistoryEntry) => {
+    if (e.item_count === 0) return e.target;
+    const key = `history.target.${e.operation}`;
+    const text = t(key, { count: String(e.item_count) });
+    return text === key ? e.target : text;
+  };
+
+  const detailText = (e: HistoryEntry) => {
+    if (e.item_count === 0) return e.detail;
+    const key = `history.detail.${e.operation}`;
+    const text = t(key, {
+      ok: String(e.ok_count),
+      fail: String(e.fail_count),
+      count: String(e.item_count),
+    });
+    const base = text === key ? e.detail : text;
+    if (!e.reason_code) return base;
+    const reasonKey = `error.${e.reason_code}`;
+    const reason = t(reasonKey);
+    return reason === reasonKey ? base : `${base}；${reason}`;
+  };
+
   const opTone = (op: string) => {
     switch (op) {
       case "process":
@@ -135,7 +169,7 @@ const HistoryView: Component<{ active?: boolean }> = (props) => {
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2">
                         <span class="font-medium text-sm truncate">
-                          {e.target}
+                          {targetText(e)}
                         </span>
                         <Show when={e.success}>
                           <CheckCircle2
@@ -145,7 +179,7 @@ const HistoryView: Component<{ active?: boolean }> = (props) => {
                         </Show>
                       </div>
                       <div class="text-xs text-zinc-500 mt-0.5">
-                        {opLabel(e.operation)} · {e.detail}
+                        {opLabel(e.operation)} · {detailText(e)}
                       </div>
                     </div>
                     <div class="text-right text-xs text-zinc-500 tabular-nums flex-shrink-0">

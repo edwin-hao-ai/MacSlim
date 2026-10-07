@@ -508,6 +508,25 @@ export const en: Dict = {
     opAppGracefulQuit: "Graceful app quit",
     opUninstall: "App uninstall",
     opDocker: "Docker cleanup",
+    // 结构化计数的本地化渲染（见 HistoryView）。
+    // 后端同时下发拼好的中文 target/detail 作兜底，
+    // 这里给双语界面用。
+    target: {
+      cache: "{count} cache items",
+      process: "{count} processes",
+      app_terminate: "{count} processes",
+      app_graceful_quit: "{count} apps",
+      uninstall: "{count} apps",
+      docker: "{count} Docker items",
+    },
+    detail: {
+      cache: "{ok} succeeded, {fail} failed",
+      process: "{ok} succeeded, {fail} failed",
+      app_terminate: "{ok} succeeded, {fail} failed",
+      app_graceful_quit: "{ok} quit, {fail} failed",
+      uninstall: "{ok} moved, {fail} failed",
+      docker: "{ok} succeeded, {fail} failed",
+    },
   },
 
   // Operation summaries (from PreparedOperation.summary_key / summary_params).

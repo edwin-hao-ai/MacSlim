@@ -463,6 +463,10 @@ fn history_entry(operation: &str) -> OperationHistoryEntry {
         freed_bytes: 0,
         success: true,
         detail: String::new(),
+        item_count: 1,
+        ok_count: 1,
+        fail_count: 0,
+        reason_code: String::new(),
     }
 }
 

@@ -458,6 +458,25 @@ export const zhCN = {
     opAppGracefulQuit: "应用优雅退出",
     opUninstall: "应用卸载",
     opDocker: "Docker 清理",
+    // 结构化计数的本地化渲染（见 HistoryView）。
+    // 后端同时下发拼好的中文 target/detail 作兜底，
+    // 这里给双语界面用。
+    target: {
+      cache: "{count} 项缓存",
+      process: "{count} 个进程",
+      app_terminate: "{count} 个进程",
+      app_graceful_quit: "{count} 个应用",
+      uninstall: "{count} 个应用",
+      docker: "{count} 项 Docker 资源",
+    },
+    detail: {
+      cache: "成功 {ok} 项，失败 {fail} 项",
+      process: "成功 {ok} 个，失败 {fail} 个",
+      app_terminate: "成功 {ok} 个，失败 {fail} 个",
+      app_graceful_quit: "成功 {ok} 个，失败 {fail} 个",
+      uninstall: "移动 {ok} 项，失败 {fail} 项",
+      docker: "成功 {ok} 项，失败 {fail} 项",
+    },
   },
 
   // 设置

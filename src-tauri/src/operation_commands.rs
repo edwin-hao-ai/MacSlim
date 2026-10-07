@@ -111,6 +111,16 @@ pub struct OperationHistoryEntry {
     pub freed_bytes: u64,
     pub success: bool,
     pub detail: String,
+    /// 结构化计数与失败错误码：界面据此**本地化**渲染。
+    ///
+    /// 与 `target` / `detail`（拼好的中文）并存，不是重复：后者给 CLI
+    /// （纯中文工具）和旧数据兜底，前者给双语界面。历史详情以前直接存中文，
+    /// 英文界面整页显示中文 —— 而历史正是本产品「可追溯」的核心页面。
+    pub item_count: u64,
+    pub ok_count: u64,
+    pub fail_count: u64,
+    /// 首个失败项的错误码（`ErrorCode` 序列化名）；空串表示没有失败原因。
+    pub reason_code: String,
 }
 
 pub trait HistorySink: Send + Sync {
@@ -129,6 +139,10 @@ impl HistorySink for StorageHistory<'_> {
             entry.freed_bytes,
             entry.success,
             &entry.detail,
+            entry.item_count,
+            entry.ok_count,
+            entry.fail_count,
+            &entry.reason_code,
         )?;
         Ok(())
     }
@@ -411,6 +425,10 @@ pub(crate) fn rejection_entry(kind: OperationKind, error: &str) -> OperationHist
         freed_bytes: 0,
         success: false,
         detail: format!("执行前复核未通过：{error}"),
+        item_count: 0,
+        ok_count: 0,
+        fail_count: 1,
+        reason_code: ErrorCode::PRE_DELETE_RECHECK_FAILED.as_str().to_owned(),
     }
 }
 
@@ -481,46 +499,73 @@ fn cache_history_detail(summary: &CleanSummary) -> String {
 pub(crate) fn history_entry(outcome: &OperationOutcome) -> OperationHistoryEntry {
     let operation = outcome.kind().label().to_owned();
     match outcome {
-        OperationOutcome::Cache(summary) => OperationHistoryEntry {
-            operation,
-            target: format!("{} 项缓存", summary.reports.len()),
-            freed_bytes: summary.total_freed_bytes,
-            success: summary.fail_count == 0,
-            detail: cache_history_detail(summary),
-        },
+        OperationOutcome::Cache(summary) => cache_entry(operation, summary),
         OperationOutcome::Process(report) => process_entry(operation, report),
         OperationOutcome::AppTerminate(report) => process_entry(operation, report),
         OperationOutcome::AppGracefulQuit(reports) => quit_entry(operation, reports),
-        OperationOutcome::Uninstall(reports) => OperationHistoryEntry {
-            operation,
-            target: format!("{} 个应用", reports.len()),
-            freed_bytes: reports.iter().fold(0_u64, |total, report| {
-                total.saturating_add(report.total_freed_bytes)
-            }),
-            success: reports.iter().all(|report| report.failed_count == 0),
-            detail: format!(
-                "移动 {} 项，失败 {} 项",
-                reports
-                    .iter()
-                    .map(|report| report.moved_count)
-                    .sum::<usize>(),
-                reports
-                    .iter()
-                    .map(|report| report.failed_count)
-                    .sum::<usize>()
-            ),
-        },
-        OperationOutcome::Docker(report) => OperationHistoryEntry {
-            operation,
-            target: format!("Docker {}", report.action),
-            freed_bytes: 0,
-            success: report.failed.is_empty(),
-            detail: format!(
-                "成功 {} 项，失败 {} 项",
-                report.succeeded.len(),
-                report.failed.len()
-            ),
-        },
+        OperationOutcome::Uninstall(reports) => uninstall_entry(operation, reports),
+        OperationOutcome::Docker(report) => docker_entry(operation, report),
+    }
+}
+
+fn cache_entry(operation: String, summary: &CleanSummary) -> OperationHistoryEntry {
+    OperationHistoryEntry {
+        operation,
+        target: format!("{} 项缓存", summary.reports.len()),
+        freed_bytes: summary.total_freed_bytes,
+        success: summary.fail_count == 0,
+        detail: cache_history_detail(summary),
+        item_count: summary.reports.len() as u64,
+        ok_count: summary.success_count as u64,
+        fail_count: summary.fail_count as u64,
+        reason_code: summary
+            .reports
+            .iter()
+            .find(|report| !report.success)
+            .and_then(|report| report.error.as_ref())
+            .map(|error| error.code.as_str().to_owned())
+            .unwrap_or_default(),
+    }
+}
+
+fn uninstall_entry(operation: String, reports: &[UninstallReport]) -> OperationHistoryEntry {
+    OperationHistoryEntry {
+        operation,
+        target: format!("{} 个应用", reports.len()),
+        freed_bytes: reports.iter().fold(0_u64, |total, report| {
+            total.saturating_add(report.total_freed_bytes)
+        }),
+        success: reports.iter().all(|report| report.failed_count == 0),
+        detail: format!(
+            "移动 {} 项，失败 {} 项",
+            reports.iter().map(|r| r.moved_count).sum::<usize>(),
+            reports.iter().map(|r| r.failed_count).sum::<usize>()
+        ),
+        item_count: reports.len() as u64,
+        ok_count: reports.iter().map(|r| r.moved_count).sum::<usize>() as u64,
+        fail_count: reports.iter().map(|r| r.failed_count).sum::<usize>() as u64,
+        reason_code: String::new(),
+    }
+}
+
+fn docker_entry(
+    operation: String,
+    report: &crate::docker::DockerExecutionReport,
+) -> OperationHistoryEntry {
+    OperationHistoryEntry {
+        operation,
+        target: format!("Docker {}", report.action),
+        freed_bytes: 0,
+        success: report.failed.is_empty(),
+        detail: format!(
+            "成功 {} 项，失败 {} 项",
+            report.succeeded.len(),
+            report.failed.len()
+        ),
+        item_count: (report.succeeded.len() + report.failed.len()) as u64,
+        ok_count: report.succeeded.len() as u64,
+        fail_count: report.failed.len() as u64,
+        reason_code: String::new(),
     }
 }
 
@@ -538,6 +583,10 @@ fn quit_entry(
         freed_bytes: 0,
         success: failed == 0,
         detail: format!("成功 {} 个，失败 {} 个", reports.len() - failed, failed),
+        item_count: reports.len() as u64,
+        ok_count: (reports.len() - failed) as u64,
+        fail_count: failed as u64,
+        reason_code: String::new(),
     }
 }
 
@@ -552,6 +601,10 @@ fn process_entry(operation: String, report: &ProcessKillReport) -> OperationHist
             report.killed.len(),
             report.failed.len()
         ),
+        item_count: report.details.len().max(report.killed.len()) as u64,
+        ok_count: report.killed.len() as u64,
+        fail_count: report.failed.len() as u64,
+        reason_code: String::new(),
     }
 }
 

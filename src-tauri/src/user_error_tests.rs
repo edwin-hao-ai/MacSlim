@@ -277,6 +277,9 @@ fn each_file_constructs_exactly_its_declared_codes() {
                 "history_write_failed",
                 "operation_id_mismatch",
                 "operation_lock_broken",
+                // 新增：`rejection_entry` 现在把「执行前复核未通过」的错误码
+                // 一并写进历史（reason_code），供界面本地化渲染失败原因。
+                "pre_delete_recheck_failed",
                 "residue_batch_empty",
             ],
         ),

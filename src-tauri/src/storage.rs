@@ -18,6 +18,13 @@ pub struct HistoryEntry {
     pub freed_bytes: u64,
     pub success: bool,
     pub detail: String,
+    /// 结构化计数：界面据此本地化渲染。
+    /// 旧数据为 0 —— 前端会回退到 `target` / `detail` 的原始文本。
+    pub item_count: u64,
+    pub ok_count: u64,
+    pub fail_count: u64,
+    /// 失败原因的错误码（`ErrorCode` 的序列化名）；空串表示没有失败原因。
+    pub reason_code: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -45,7 +52,13 @@ impl Storage {
                 target TEXT NOT NULL,
                 freed_bytes INTEGER NOT NULL DEFAULT 0,
                 success INTEGER NOT NULL DEFAULT 1,
-                detail TEXT NOT NULL DEFAULT ''
+                detail TEXT NOT NULL DEFAULT '',
+                -- 结构化字段：界面据此本地化渲染（见 HistoryView）。
+                -- target/detail 是拼好的中文，给 CLI 与旧数据兜底用。
+                item_count INTEGER NOT NULL DEFAULT 0,
+                ok_count INTEGER NOT NULL DEFAULT 0,
+                fail_count INTEGER NOT NULL DEFAULT 0,
+                reason_code TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_history_ts ON history(timestamp DESC);
 
@@ -60,12 +73,52 @@ impl Storage {
             "#,
         )
         .map_err(|e| format!("初始化 schema 失败: {}", e))?;
+        Self::migrate_history_columns(&conn)?;
 
         Ok(Storage {
             conn: Mutex::new(conn),
         })
     }
 
+    /// 给老库补上后加的结构化列。
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` 对**已存在**的表什么都不做，所以新增列
+    /// 必须显式 ALTER，否则升级上来的用户一读历史就报「no such column」。
+    /// 默认值让旧行天然表示「没有结构化数据」，前端据此回退到 target/detail。
+    fn migrate_history_columns(conn: &Connection) -> Result<(), UserError> {
+        let existing: Vec<String> = conn
+            .prepare("PRAGMA table_info(history)")
+            .and_then(|mut stmt| {
+                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| e.to_string())?;
+        for (name, ddl) in [
+            (
+                "item_count",
+                "ALTER TABLE history ADD COLUMN item_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "ok_count",
+                "ALTER TABLE history ADD COLUMN ok_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "fail_count",
+                "ALTER TABLE history ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "reason_code",
+                "ALTER TABLE history ADD COLUMN reason_code TEXT NOT NULL DEFAULT ''",
+            ),
+        ] {
+            if !existing.iter().any(|c| c == name) {
+                conn.execute(ddl, []).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn log_history(
         &self,
         operation: &str,
@@ -73,19 +126,29 @@ impl Storage {
         freed_bytes: u64,
         success: bool,
         detail: &str,
+        item_count: u64,
+        ok_count: u64,
+        fail_count: u64,
+        reason_code: &str,
     ) -> Result<i64, UserError> {
         let now = Utc::now().to_rfc3339();
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         c.execute(
-            "INSERT INTO history (timestamp, operation, target, freed_bytes, success, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO history
+               (timestamp, operation, target, freed_bytes, success, detail,
+                item_count, ok_count, fail_count, reason_code)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 now,
                 operation,
                 target,
                 freed_bytes as i64,
                 success as i32,
-                detail
+                detail,
+                item_count as i64,
+                ok_count as i64,
+                fail_count as i64,
+                reason_code
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -96,7 +159,8 @@ impl Storage {
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = c
             .prepare(
-                "SELECT id, timestamp, operation, target, freed_bytes, success, detail
+                "SELECT id, timestamp, operation, target, freed_bytes, success, detail,
+                        item_count, ok_count, fail_count, reason_code
                  FROM history ORDER BY id DESC LIMIT ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -114,6 +178,10 @@ impl Storage {
                     freed_bytes: r.get::<_, i64>(4)? as u64,
                     success: r.get::<_, i32>(5)? != 0,
                     detail: r.get(6)?,
+                    item_count: r.get::<_, i64>(7)? as u64,
+                    ok_count: r.get::<_, i64>(8)? as u64,
+                    fail_count: r.get::<_, i64>(9)? as u64,
+                    reason_code: r.get(10)?,
                 })
             })
             .map_err(|e| e.to_string())?;
