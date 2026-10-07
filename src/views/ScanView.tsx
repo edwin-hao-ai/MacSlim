@@ -72,7 +72,10 @@ const ScanView: Component = () => {
       setSnapshot(next);
       setSelected(new Set(defaultSelectedKeys(next.value.processes)));
     } catch (e) {
-      setMessage(t("scan.scanFailed", { error: String(e) }));
+      // 后端错误是结构化对象，直接 `String(e)` 会渲染成 `[object Object]`。
+      // 与 ProcessView / CacheView 走同一套分类与翻译。
+      const info = classifyOperationError(e);
+      setMessage(t("scan.scanFailed", { error: errorText(info, tText) }));
     } finally {
       setScanning(false);
     }
@@ -80,6 +83,7 @@ const ScanView: Component = () => {
 
   let unlistenHealth: UnlistenFn | undefined;
   let unlistenOptimize: UnlistenFn | undefined;
+  let unlistenScan: UnlistenFn | undefined;
   let disposed = false;
 
   const stopListener = (unlisten: UnlistenFn | undefined, label: string) => {
@@ -107,6 +111,19 @@ const ScanView: Component = () => {
         return;
       }
       unlistenHealth = healthUnlisten;
+      // 托盘「立即扫描」菜单触发。
+      //
+      // 托盘只发事件、App.tsx 收到后仅把当前视图切到 scan —— 而所有视图是
+      // 常驻挂载的，切过去并不会重新扫描。结果是用户点「立即扫描」看到的是
+      // 上次的旧数据，托盘承诺的动作根本没发生。这里补上真正的重新扫描。
+      const scanUnlisten = await listen<void>("tray:scan", async () => {
+        await runScan();
+      });
+      if (disposed) {
+        stopListener(scanUnlisten, "立即扫描");
+        return;
+      }
+      unlistenScan = scanUnlisten;
       // 托盘「一键优化」菜单触发
       const optimizeUnlisten = await listen<void>("tray:optimize", async () => {
         await runScan();
@@ -125,8 +142,10 @@ const ScanView: Component = () => {
     disposed = true;
     stopListener(unlistenHealth, "健康更新");
     stopListener(unlistenOptimize, "一键优化");
+    stopListener(unlistenScan, "立即扫描");
     unlistenHealth = undefined;
     unlistenOptimize = undefined;
+    unlistenScan = undefined;
   });
 
   const handleStart = async () => {

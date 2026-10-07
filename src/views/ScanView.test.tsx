@@ -159,36 +159,43 @@ describe("ScanView event lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  it("unlistens both Tauri listeners on cleanup", async () => {
+  it("unlistens every Tauri listener on cleanup", async () => {
+    // 三个监听：health:update、tray:scan、tray:optimize。
+    // tray:scan 是后补的 —— 托盘「立即扫描」原先只切视图、不重新扫描。
     const healthUnlisten = vi.fn().mockResolvedValue(undefined);
+    const scanUnlisten = vi.fn().mockResolvedValue(undefined);
     const optimizeUnlisten = vi.fn().mockResolvedValue(undefined);
     mocks.listen
       .mockResolvedValueOnce(healthUnlisten)
+      .mockResolvedValueOnce(scanUnlisten)
       .mockResolvedValueOnce(optimizeUnlisten);
     const view = render(() => <ScanView />);
 
-    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(3));
     view.unmount();
 
     await waitFor(() => {
       expect(healthUnlisten).toHaveBeenCalledTimes(1);
+      expect(scanUnlisten).toHaveBeenCalledTimes(1);
       expect(optimizeUnlisten).toHaveBeenCalledTimes(1);
     });
   });
 
   it("catches rejected unlisten promises", async () => {
     const healthUnlisten = vi.fn().mockRejectedValue(new Error("health unlisten failed"));
+    const scanUnlisten = vi.fn().mockRejectedValue(new Error("scan unlisten failed"));
     const optimizeUnlisten = vi.fn().mockRejectedValue(new Error("optimize unlisten failed"));
     mocks.listen
       .mockResolvedValueOnce(healthUnlisten)
+      .mockResolvedValueOnce(scanUnlisten)
       .mockResolvedValueOnce(optimizeUnlisten);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const view = render(() => <ScanView />);
 
-    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(3));
     view.unmount();
 
-    await waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(3));
   });
 });
 
