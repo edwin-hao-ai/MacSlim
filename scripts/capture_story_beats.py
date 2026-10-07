@@ -176,31 +176,59 @@ end run
 GRANT_BUTTON_POINT = (1358, 218)
 
 # 侧栏「历史记录」导航项的实测坐标（第五拍要切过去）。
-# 和授权按钮同理：它在 webview 里，AX 搜不到，只能按坐标点。侧栏固定宽度 +
-# 固定行高，坐标稳定。
-NAV_HISTORY_POINT = (49, 262)
+# 和授权按钮同理：它在 webview 里，AX 搜不到（实测 entire contents 返回
+# 0 个 AXButton），只能按坐标点。侧栏固定宽度 + 固定行高，实测各行中心
+# （pt）：智能扫描 78、进程管理 116、缓存清理 154、应用卸载 192、
+# 历史记录 230、设置 268，行距 38。
+NAV_HISTORY_POINT = (49, 230)
+
+# 主 CTA「清理」所在区域（像素，左上-右下）。
+#
+# 必须给搜索限定区域：全图搜青绿会先命中左上角侧栏的选中底色，点下去会
+# 导航到别的页面。而 03 拍的校验又会被「智能扫描」页那个**红色磁盘环**骗过
+# —— 于是脚本报「二次确认弹窗没出现」以外的错，真正的问题（点错了地方）
+# 完全看不出来。区域按实测：按钮在 px x 620~740、y 1500~1600 附近，
+# 留足余量并排除侧栏（侧栏宽约 320 px）。
+CLEAN_BUTTON_REGION = (350, 1400, 1500, 1790)
+
+# 二次确认弹窗所在区域（像素）。弹窗是居中的模态框，实测约占
+# px x 990~1890、y 590~1230。缩到这块有两个作用：校验「弹窗有没有出现」
+# 不会被别处的红色骗过（「智能扫描」页那个 87% 的红色磁盘环就骗过一次），
+# 找「确认执行」也不会误点到别处。
+CONFIRM_DIALOG_REGION = (900, 550, 2000, 1300)
 
 
-def find_color_block(image: Image.Image, predicate) -> tuple[int, int] | None:
-    """全图搜符合颜色判据的像素块，返回其中心的**点坐标**。
+def find_color_block(
+    image: Image.Image,
+    predicate,
+    region: tuple[int, int, int, int] | None = None,
+) -> tuple[int, int] | None:
+    """搜符合颜色判据的像素块，返回其中心的**点坐标**。
 
     不做手工换算：截图是 2880x1800 像素、而预览给我的图是缩过的，我按预览
     尺寸算坐标连续错了三次。搜色块则与显示比例无关。
+
+    **必须能限定 region**：不限定就是在整屏里找，而它挑的是 `g - r` 最大的
+    那一个点 —— 于是找「清理」主按钮时会先命中左上角侧栏的选中底色，点下去
+    导航到别的页面。这个 bug 很隐蔽：截图里确实有按钮、搜索也确实搜到了
+    「青绿色」，只是搜到的是另一个青绿色。region 是像素坐标 (x0, y0, x1, y1)。
     """
+    x0, y0, x1, y1 = region if region else (0, 0, *image.size)
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(image.width, x1), min(image.height, y1)
     px = image.load()
-    width, height = image.size
     best = None
-    for y in range(0, height, 3):
-        for x in range(0, width, 3):
+    for y in range(y0, y1, 3):
+        for x in range(x0, x1, 3):
             r, g, b = px[x, y]
             if predicate(r, g, b) and (best is None or g - r > best[0]):
                 best = (g - r, x, y, (r, g, b))
     if best is None:
         return None
     _, bx, by, colour = best
-    xs = [x for x in range(max(0, bx - 400), min(width, bx + 400))
+    xs = [x for x in range(max(x0, bx - 400), min(x1, bx + 400))
           if all(abs(px[x, by][i] - colour[i]) < 30 for i in range(3))]
-    ys = [y for y in range(max(0, by - 300), min(height, by + 300))
+    ys = [y for y in range(max(y0, by - 300), min(y1, by + 300))
           if all(abs(px[bx, y][i] - colour[i]) < 30 for i in range(3))]
     return (min(xs) + max(xs)) // 4, (min(ys) + max(ys)) // 4
 
@@ -214,8 +242,19 @@ def is_confirm_red(r: int, g: int, b: int) -> bool:
 
 
 def click_point(point: tuple[int, int]) -> None:
-    run(["osascript", "-e",
-         f'tell application "System Events" to click at {{{point[0]}, {point[1]}}}'])
+    """点一个屏幕坐标。
+
+    **必须**投递真正的鼠标事件（`_click.py` 走 CGEventPost），不能用
+    `System Events ... click at`：后者是 Accessibility 通道，对 WKWebView 里
+    的 HTML 按钮完全无效 —— WebKit 不把 DOM 节点暴露成可执行 AXPress 的
+    元素，点击被悄悄丢掉，既不报错也没有日志。
+
+    这个坑的误导性在于所有表面证据都是对的：前台对（截图拍到 app）、坐标对
+    （对着截图量的）、权限对（`set frontmost` 生效）。实测把侧栏点击换成
+    CGEvent 后立刻生效，而 `click at` 同一坐标毫无反应。
+    """
+    run([sys.executable, str(ROOT / "scripts/_click.py"),
+         str(point[0]), str(point[1])])
     time.sleep(3)
 
 
@@ -234,29 +273,36 @@ def db_history() -> list[tuple]:
         con.close()
 
 
-# 「0 B」本身也是 teal 大字 —— 实测空态这张图在该区域有 430 个 teal 像素。
-# 所以判据不能是「>0」，否则第一拍永远通不过（曾经就是这样：截图拍得完全正确，
-# 却被自己的校验判成「出现了可释放空间」）。真实数值（10.50 GB）字形数是
-# 「0 B」的三四倍，落在 1200 以上。
-MIN_DATA_TEAL = 1200
+def is_reclaim_value(r: int, g: int, b: int) -> bool:
+    """「可释放空间」那个大数字的颜色。
+
+    实测色是 (65, 143, 174) —— 注意它**不是**主按钮那种 teal：模块里已有的
+    `is_teal` 判据是 `g > 170 and b > 170`，数字的 g 只有 143，一个都匹配不上
+    （第一次写错就栽在这：数字明明在屏幕上，计数却是 70）。
+    """
+    return g > 120 and b > 150 and g - r > 40 and b - r > 60
 
 
-def reclaimable_bytes(image: Image.Image) -> int:
-    """「可释放空间」那一大片 teal 大字的像素面积。
+# 数字是右对齐的，所以「有没有数据」看**横向跨度**比看像素总数稳得多。
+# 实测：空态「0 B」跨度 86 px，「10.50 GB」跨度 259 px —— 3 倍差距；
+# 而按像素总数只有 2.75 倍（430 vs 1183），阈值定在哪边都心虚。
+MIN_VALUE_SPAN = 150
 
-    只判「有没有」，不判具体数值 —— 具体数值由 fixture 体积决定，而那是
-    我们自己造的，用不着从像素里反推。返回值会打进日志：阈值万一再偏，
-    至少能一眼看出是判据错了还是界面变了。
+
+def reclaim_value_span(image: Image.Image) -> int:
+    """那个大数字的横向像素跨度；没有数字时返回 0。
+
+    只判「有没有」，不反推具体数值 —— 数值由 fixture 体积决定，是我们自己
+    造的，没必要从像素里读出来。
     """
     px = image.load()
-    return sum(1 for y in range(900, 1250, 2) for x in range(2300, CANVAS[0], 2)
-               if is_teal(*px[x, y]))
+    xs = [x for y in range(980, 1180, 2) for x in range(2300, CANVAS[0], 2)
+          if is_reclaim_value(*px[x, y])]
+    return (max(xs) - min(xs)) if xs else 0
 
 
 def has_data(image: Image.Image) -> bool:
-    count = reclaimable_bytes(image)
-    print(f"    （可释放区域 teal 像素 {count}，阈值 {MIN_DATA_TEAL}）", flush=True)
-    return count > MIN_DATA_TEAL
+    return reclaim_value_span(image) > MIN_VALUE_SPAN
 
 
 def reset_grants() -> None:
@@ -279,18 +325,18 @@ def verify_grant_point(image: Image.Image) -> None:
     所以看坐标点周围 24x24 像素的网格，青绿占比过高就拒绝点。
     """
     x, y = GRANT_BUTTON_POINT
-    # 截图是 2 倍像素，坐标是点，先换算再取样
-    px = image.convert("RGB").load()
+    # 截图是 2 倍像素，坐标是点，先换算再取样。
+    # 判据用 is_teal —— 它就是对主按钮标定的（实测按钮色 (82,179,208)）。
+    image = image.convert("RGB")
+    px = image.load()
     teal = 0
     sampled = 0
     for dy in range(-12, 13, 4):
         for dx in range(-12, 13, 4):
             sx, sy = (x + dx) * 2, (y + dy) * 2
             if 0 <= sx < image.width and 0 <= sy < image.height:
-                r, g, b = px[sx, sy]
                 sampled += 1
-                # 与主按钮同族的青绿：g 明显高于 r，且整体偏亮
-                if g > 130 and g - r > 45 and b > 110:
+                if is_teal(*px[sx, sy]):
                     teal += 1
     if sampled == 0:
         fail(f"取样点 ({x},{y}) 落在截图外，坐标换算有问题")
@@ -301,22 +347,55 @@ def verify_grant_point(image: Image.Image) -> None:
         )
 
 
-def do_grant(image_png: Path) -> None:
-    """点「授权」→ 面板已开在目标目录 → 点 Open。
+def window_names() -> list[str]:
+    result = subprocess.run(
+        ["osascript", "-e",
+         'tell application "System Events" to tell process "macslim" '
+         'to get name of every window'],
+        capture_output=True, text=True,
+    )
+    return [n.strip() for n in result.stdout.split(",") if n.strip()]
 
-    面板起始目录是 `d0f3075` 修的：现在点哪一行的授权就开在哪一行，所以不
-    需要再 ⌘⇧G 手输路径 —— 之前每次都得手打，就是这个 bug 的症状。
+
+def press_key(key: str) -> None:
+    run([sys.executable, str(ROOT / "scripts/_click.py"), "--key", key])
+    time.sleep(1)
+
+
+def do_grant(image_png: Path) -> None:
+    """点「授权」→ 在选择框里回车确认。
+
+    两步都必须用**真**事件：
+    - 点「授权」：`System Events click at` 走 AX 通道，对 WKWebView 里的
+      HTML 链接无效（详见 click_point 的注释）
+    - 确认选择框：用回车接受默认按钮，而不是按坐标找那个蓝色「打开」。
+      面板每次出现的位置会变，按坐标找既脆又容易误点到 app 自己的蓝色元素
+      —— 之前就是这么把面板点没了，然后报「授权之后仍扫不到 fixture」。
+
+    面板起始目录是 `d0f3075` 修的：点哪一行的授权就开在哪一行（实测点
+    「应用日志」那一行，面板开在 ~/Library/Logs），所以不需要再手工输路径。
     """
     if not click_button("授权"):
         say("AX 搜不到「授权」，改用实测坐标（先过颜色守卫）")
         verify_grant_point(capture(image_png))
         click_point(GRANT_BUTTON_POINT)
-    time.sleep(5)
-    shot = capture(image_png)
-    point = find_color_block(shot, lambda r, g, b: b > 200 and r < 110 and 100 < g < 190)
-    if point is None:
-        fail("文件选择框的 Open 按钮不可用（面板可能没打开）")
-    click_point(point)
+
+    # 等面板真的出现再回车。直接 sleep 后回车会在面板还没起来时把回车发给
+    # 主窗口 —— 那就成了「什么都没发生」。
+    for _ in range(10):
+        time.sleep(1)
+        if len(window_names()) >= 2:
+            break
+    else:
+        fail(f"点了「授权」但选择框没出现（当前窗口：{window_names()}）")
+
+    press_key("return")
+
+    # 再等面板消失，确认回车被面板吃掉了而不是落到别处
+    for _ in range(10):
+        time.sleep(1)
+        if len(window_names()) < 2:
+            break
 
 
 def wait_for_reclaimable(image_png: Path, want_data: bool, timeout: int = 40) -> Image.Image:
@@ -402,13 +481,13 @@ def shoot_granted(out: Path, probe: Path) -> None:
 def shoot_confirm(out: Path, probe: Path) -> None:
     """第三拍：二次确认弹窗。"""
     if not click_button("清理"):
-        point = find_color_block(capture(probe), is_teal)
+        point = find_color_block(capture(probe), is_teal, CLEAN_BUTTON_REGION)
         if point is None:
             fail("找不到清理主按钮")
         click_point(point)
     time.sleep(4)
     image = capture(out / "03-confirm.png")
-    if find_color_block(image, is_confirm_red) is None:
+    if find_color_block(image, is_confirm_red, CONFIRM_DIALOG_REGION) is None:
         fail("二次确认弹窗没出现")
     say("03-confirm：二次确认弹窗")
 
@@ -422,7 +501,7 @@ def wait_fixture_gone(timeout: int = 40) -> None:
 def shoot_cleaned(out: Path, probe: Path) -> None:
     """第四拍：清理完成 —— 并核对它是真的删掉了，不只是界面变了。"""
     if not click_button("确认执行"):
-        point = find_color_block(capture(probe), is_confirm_red)
+        point = find_color_block(capture(probe), is_confirm_red, CONFIRM_DIALOG_REGION)
         if point is None:
             fail("找不到「确认执行」按钮")
         click_point(point)
