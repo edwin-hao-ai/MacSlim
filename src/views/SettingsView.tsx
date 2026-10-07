@@ -153,12 +153,17 @@ const SettingsView: Component = () => {
       </div>
 
       <div class="card p-2">
-        <ToggleRow
-          label={t("settings.autostart")}
-          desc={t("settings.autostartDesc")}
-          checked={autostart()}
-          onChange={toggleAutostart}
-        />
+        {/* App Store 版藏掉开机自启：插件的 macOS 实现只写
+            ~/Library/LaunchAgents，沙箱把该路径重定向进 container，
+            开关能动但重启后什么都没发生 —— 假开关比没有更糟。 */}
+        <Show when={can("autoStart")}>
+          <ToggleRow
+            label={t("settings.autostart")}
+            desc={t("settings.autostartDesc")}
+            checked={autostart()}
+            onChange={toggleAutostart}
+          />
+        </Show>
         <ToggleRow
           label={t("settings.notifyClean")}
           desc={t("settings.notifyCleanDesc")}

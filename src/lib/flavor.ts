@@ -91,6 +91,18 @@ export type Capability =
   /** 应用内检查更新 */
   | "inAppUpdate"
   /**
+   * 开机自启（登录时自动启动）。
+   *
+   * MAS 版不成立：`tauri-plugin-autostart` 在 macOS 上只会写
+   * `~/Library/LaunchAgents`，而沙箱把该路径重定向到应用自己的 container ——
+   * 写入不会生效，`isEnabled()` 读的也是 container 里那份。结果是开关能拨动、
+   * 状态能变化、重启后什么都没发生，纯假开关。
+   *
+   * 沙箱版的正确做法是 `SMAppService`（设计文档里也这么写），插件没提供，
+   * 需要自己用 objc2 接；在接上之前宁可把开关藏起来。
+   */
+  | "autoStart"
+  /**
    * 需要用户逐目录授权才能读用户数据。
    *
    * 单独一项而不是复用 cacheClean：两者在 MAS 版**同时为真**，
@@ -117,6 +129,7 @@ const DEVELOPER_ID: readonly Capability[] = [
   "cacheClean",
   "appSizeAnalysis",
   "appUninstall",
+  "autoStart",
   "inAppUpdate",
   "dockerCleanup",
 ];
@@ -129,6 +142,9 @@ const DEVELOPER_ID: readonly Capability[] = [
 // - appUninstall：卸载要 exec osascript 并写 /Applications，沙箱里两条都做不到。
 //   注意 `appSizeAnalysis` **仍在** MAS 里 —— 看体积是只读的，成立；
 //   这一页因此保留，只是收起「卸载」动作（见 UninstallerView）。
+// - autoStart：插件的 macOS 实现只写 ~/Library/LaunchAgents，沙箱会把它
+//   重定向进 container —— 开关能动、重启后没反应，是假开关。正确做法是
+//   SMAppService，插件没提供。
 // - dockerCleanup：要 exec `docker` CLI，沙箱里拿不到 inventory
 const MAS: readonly Capability[] = [
   "processMonitor",

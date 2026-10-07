@@ -41,6 +41,11 @@ describe("能力门禁：MAS 版不得出现用不了的入口", () => {
     expect(can("appSizeAnalysis")).toBe(true);
   });
 
+  it("MAS 不能开机自启 —— 插件只写 LaunchAgent，沙箱里是假开关", async () => {
+    const { can } = await importFlavor();
+    expect(can("autoStart")).toBe(false);
+  });
+
   it("MAS 不能卸载应用 —— 卸载要 exec osascript 并写 /Applications", async () => {
     // 沙箱只允许 exec 自己 bundle 里的二进制（osascript 起不来），
     // 且 /Applications 与 ~/Library/Application Support 不在授权范围内。
