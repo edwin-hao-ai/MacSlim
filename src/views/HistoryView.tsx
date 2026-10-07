@@ -1,10 +1,21 @@
-import { Component, createSignal, For, onMount, Show } from "solid-js";
+import { Component, createEffect, createSignal, For, Show } from "solid-js";
 import { getHistory, type HistoryEntry } from "@/lib/tauri";
 import { fmtBytes, fmtRelativeTime } from "@/lib/format";
 import { CheckCircle2, XCircle, Cpu, HardDrive, Loader2, LogOut, Trash2, PowerOff, Zap } from "lucide-solid";
 import { useI18n } from "@/i18n";
 
-const HistoryView: Component = () => {
+/**
+ * `active` 由 App 的当前视图传下来。
+ *
+ * 为什么必须重新加载：`TabPanel` 只是把非当前页 `display: none`，**所有视图
+ * 从启动起就常驻挂载**。原来这里只在 `onMount` 读一次历史 —— 于是「清理成功
+ * → 切到历史记录」看到的是启动那一刻的空列表，用户会以为刚才那一下什么都没
+ * 发生。而「每步操作有记录、可追溯」正是这个产品对用户的核心承诺。
+ *
+ * 依赖 `props.active` 变真时重读，也顺带覆盖了别的入口（卸载、终止进程）
+ * 写入的历史。
+ */
+const HistoryView: Component<{ active?: boolean }> = (props) => {
   const { t, effectiveLocale } = useI18n();
   const [entries, setEntries] = createSignal<HistoryEntry[]>([]);
   const [loading, setLoading] = createSignal(false);
@@ -19,7 +30,9 @@ const HistoryView: Component = () => {
     }
   };
 
-  onMount(load);
+  createEffect(() => {
+    if (props.active) void load();
+  });
 
   const opLabel = (op: string) => {
     switch (op) {

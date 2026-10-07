@@ -1,4 +1,5 @@
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ getHistory: vi.fn() }));
@@ -72,7 +73,7 @@ describe("HistoryView operation labels", () => {
   });
 
   it("labels every broker operation kind in Chinese", async () => {
-    render(() => <HistoryView />);
+    render(() => <HistoryView active />);
     await waitFor(() => expect(mocks.getHistory).toHaveBeenCalled());
     const expected = [
       zhCN.history.opCache,
@@ -90,7 +91,7 @@ describe("HistoryView operation labels", () => {
   });
 
   it("never renders a raw operation key or an unknown-operation fallback", async () => {
-    render(() => <HistoryView />);
+    render(() => <HistoryView active />);
     await waitFor(() => expect(mocks.getHistory).toHaveBeenCalled());
     const text = document.body.textContent ?? "";
     for (const operation of OPERATIONS) {
@@ -109,11 +110,30 @@ describe("HistoryView operation labels", () => {
 
   it("renders the graceful quit row with its own label", async () => {
     mocks.getHistory.mockResolvedValue([row(1, "app_graceful_quit")]);
-    const view = render(() => <HistoryView />);
+    const view = render(() => <HistoryView active />);
     await waitFor(() =>
       expect(view.container.textContent).toContain(zhCN.history.opAppGracefulQuit),
     );
     expect(view.container.textContent).not.toContain("app_graceful_quit");
     expect(view.container.textContent).not.toContain(zhCN.history.opAppTerminate);
+  });
+
+  it("reloads every time the view becomes active", async () => {
+    // 这条抓的是「清理成功但历史页显示空」：TabPanel 只是 display:none，
+    // 所有视图从启动起常驻，若只在 onMount 读一次，用户清理完切到历史记录
+    // 看到的是启动那一刻的空列表 —— 会以为刚才什么都没发生。
+    mocks.getHistory.mockResolvedValue([row(1, "cache")]);
+    const [active, setActive] = createSignal(false);
+    render(() => <HistoryView active={active()} />);
+
+    expect(mocks.getHistory).not.toHaveBeenCalled();
+
+    setActive(true);
+    await waitFor(() => expect(mocks.getHistory).toHaveBeenCalledTimes(1));
+
+    // 清理之后再进历史页：必须重新读一次，而不是复用启动时的旧结果
+    setActive(false);
+    setActive(true);
+    await waitFor(() => expect(mocks.getHistory).toHaveBeenCalledTimes(2));
   });
 });

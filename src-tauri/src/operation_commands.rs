@@ -453,6 +453,31 @@ fn history_write_failed(
     )
 }
 
+/// 缓存清理的历史详情。
+///
+/// 有失败时**必须带上原因**。原来只写「成功 X 项，失败 Y 项，释放 Z」——
+/// 用户看到一条失败记录却没有任何线索，只能重试或放弃；而排查的人连「哪个
+/// 路径、被什么拒绝」都拿不到（这个摘要丢掉信息，曾让一个必然失败的沙箱
+/// 预检在真机上排查了很久）。
+///
+/// 用 `UserError.message` 而不是 `code`：message 按约定就是中文人话，
+/// 而历史详情是直接展示给用户的字符串，没有前端 i18n 这一步。
+fn cache_history_detail(summary: &CleanSummary) -> String {
+    let base = format!(
+        "成功 {} 项，失败 {} 项，释放 {}",
+        summary.success_count, summary.fail_count, summary.total_freed_bytes
+    );
+    let Some(reason) = summary
+        .reports
+        .iter()
+        .find(|report| !report.success)
+        .and_then(|report| report.error.as_ref())
+    else {
+        return base;
+    };
+    format!("{base}；原因：{}", reason.message)
+}
+
 pub(crate) fn history_entry(outcome: &OperationOutcome) -> OperationHistoryEntry {
     let operation = outcome.kind().label().to_owned();
     match outcome {
@@ -461,10 +486,7 @@ pub(crate) fn history_entry(outcome: &OperationOutcome) -> OperationHistoryEntry
             target: format!("{} 项缓存", summary.reports.len()),
             freed_bytes: summary.total_freed_bytes,
             success: summary.fail_count == 0,
-            detail: format!(
-                "成功 {} 项，失败 {} 项，释放 {}",
-                summary.success_count, summary.fail_count, summary.total_freed_bytes
-            ),
+            detail: cache_history_detail(summary),
         },
         OperationOutcome::Process(report) => process_entry(operation, report),
         OperationOutcome::AppTerminate(report) => process_entry(operation, report),

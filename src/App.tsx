@@ -76,7 +76,7 @@ const App: Component = () => {
       <TabPanel id="applications" active={view()}><ApplicationsView /></TabPanel>
       <TabPanel id="cache" active={view()}><CacheView /></TabPanel>
       <TabPanel id="uninstaller" active={view()}><UninstallerView /></TabPanel>
-      <TabPanel id="history" active={view()}><HistoryView /></TabPanel>
+      <TabPanel id="history" active={view()}><HistoryView active={view() === "history"} /></TabPanel>
       <TabPanel id="settings" active={view()}><SettingsView /></TabPanel>
     </AppShell>
   );
