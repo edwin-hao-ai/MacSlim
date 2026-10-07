@@ -158,6 +158,20 @@ describe("HistoryView operation labels", () => {
     expect(text).not.toContain("详情");
   });
 
+  it("计数为 1 时用单数变体（英文的 1 cache items 是语病）", async () => {
+    mocks.getHistory.mockResolvedValue([
+      { ...row(1, "cache"), item_count: 1, ok_count: 1, fail_count: 0, reason_code: "" },
+    ]);
+    render(() => <HistoryView active />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("1 项缓存"),
+    );
+    // 复数模板是 "{count} 项缓存"，单数变体是 "1 项缓存" —— 两者在这里
+    // 文案相同，所以再断言一次「没有走到复数模板」靠的是英文词条；
+    // zh 下这条主要是防止单数分支抛错/取不到 key。
+    expect(document.body.textContent).not.toContain("history.target");
+  });
+
   it("旧数据（计数为 0）回退到后端原文，不猜", async () => {
     mocks.getHistory.mockResolvedValue([row(7, "cache")]);
     render(() => <HistoryView active />);

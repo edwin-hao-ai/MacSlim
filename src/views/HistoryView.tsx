@@ -67,9 +67,16 @@ const HistoryView: Component<{ active?: boolean }> = (props) => {
    */
   const targetText = (e: HistoryEntry) => {
     if (e.item_count === 0) return e.target;
-    const key = `history.target.${e.operation}`;
+    // 计数为 1 时用单数变体：英文的 "1 cache items" 是明显语病，而历史页
+    // 恰恰经常只有一条记录 —— 商店截图里就是这个形态。
+    const suffix = e.item_count === 1 ? "_one" : "";
+    const key = `history.target.${e.operation}${suffix}`;
     const text = t(key, { count: String(e.item_count) });
-    return text === key ? e.target : text;
+    if (text !== key) return text;
+    // 没有单数变体就退回复数模板
+    const fallbackKey = `history.target.${e.operation}`;
+    const fallback = t(fallbackKey, { count: String(e.item_count) });
+    return fallback === fallbackKey ? e.target : fallback;
   };
 
   const detailText = (e: HistoryEntry) => {

@@ -468,6 +468,12 @@ export const zhCN = {
       app_graceful_quit: "{count} 个应用",
       uninstall: "{count} 个应用",
       docker: "{count} 项 Docker 资源",
+      cache_one: "1 项缓存",
+      process_one: "1 个进程",
+      app_terminate_one: "1 个进程",
+      app_graceful_quit_one: "1 个应用",
+      uninstall_one: "1 个应用",
+      docker_one: "1 项 Docker 资源",
     },
     detail: {
       cache: "成功 {ok} 项，失败 {fail} 项",

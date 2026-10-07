@@ -263,12 +263,21 @@ def fixture_files() -> int:
     return len(list(logs.glob(FIXTURE_GLOB))) if logs.exists() else 0
 
 
-def db_history() -> list[tuple]:
+def db_history() -> list[dict]:
+    """最近的历史记录，**按列名**取。
+
+    曾经用 `select *` 再取 `row[-1]` —— 而 `history` 表后来加了
+    item_count / ok_count / fail_count / reason_code 四列，`[-1]` 从 detail
+    变成了 reason_code（空串）。断言于是永远失败，看起来像「清理没成功」，
+    实际清理是成功的。位置索引对会变的表结构太脆，改成按名字取。
+    """
     if not DB_PATH.exists():
         return []
     con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
     try:
-        return con.execute("select * from history order by id desc").fetchall()
+        rows = con.execute("select * from history order by id desc").fetchall()
+        return [dict(row) for row in rows]
     finally:
         con.close()
 
@@ -512,9 +521,15 @@ def shoot_cleaned(out: Path, probe: Path) -> None:
     if remaining != 0:
         fail(f"清理没有真的删掉 fixture（还剩 {remaining} 个文件）。"
              f"历史记录：{history[:1]}")
-    if not history or "成功 1 项" not in str(history[0][-1]):
+    # 用结构化字段判定，而不是去匹配 detail 里的中文措辞 ——
+    # 措辞会随本地化/文案调整变化，ok_count 不会。
+    if not history or history[0]["ok_count"] < 1 or history[0]["fail_count"] != 0:
         fail(f"历史记录没有记成功：{history[:1]}")
-    say(f"清理真的生效：fixture 已清空，历史记「{history[0][-1]}」")
+    say(
+        f"清理真的生效：fixture 已清空，"
+        f"历史记「{history[0]['detail']}」（ok={history[0]['ok_count']} "
+        f"fail={history[0]['fail_count']}）"
+    )
     time.sleep(3)
     capture(out / "04-cleaned.png")
 

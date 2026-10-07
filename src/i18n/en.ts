@@ -518,6 +518,12 @@ export const en: Dict = {
       app_graceful_quit: "{count} apps",
       uninstall: "{count} apps",
       docker: "{count} Docker items",
+      cache_one: "1 cache item",
+      process_one: "1 process",
+      app_terminate_one: "1 process",
+      app_graceful_quit_one: "1 app",
+      uninstall_one: "1 app",
+      docker_one: "1 Docker item",
     },
     detail: {
       cache: "{ok} succeeded, {fail} failed",
