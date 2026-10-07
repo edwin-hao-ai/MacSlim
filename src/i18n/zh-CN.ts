@@ -607,6 +607,7 @@ export const zhCN = {
     residueSize: "残留大小",
     totalSize: "总大小",
     search: "搜索应用名称或 Bundle ID...",
+    sandboxNotice: "App Store 版运行在系统沙箱里，无法删除应用 —— 平台限制，授权也解决不了。这一页仍可用来查看每个应用占用的空间，按体积排序找出大户。",
     hideSystem: "隐藏系统应用",
     systemApp: "系统核心应用，不建议卸载",
     selectedCount: "已选 {count} 个应用",

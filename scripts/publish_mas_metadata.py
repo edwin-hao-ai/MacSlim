@@ -84,8 +84,8 @@ CPU、内存、磁盘三项实时读数，环形图一眼看出余量。全部�
 应用体积分析
 自动读取每个已安装应用的实际占用，按体积排序。Xcode 之类的开发工具往往是最容易被忽略的大户。
 
-应用卸载
-移除应用本体，并清理它在各处留下的偏好设置与支持文件。App Store 应用也能卸载。
+关于删除应用
+App Store 版受系统沙箱限制，无法删除应用本身（这是平台规定，授权也解决不了）。上面的体积分析照常可用 —— 想知道空间去哪了，这一页就够；要真正卸载，请用访达把它拖进废纸篓。
 
 缓存清理：授权一次，长期有效
 这一条与别的清理工具不一样，说明白为什么：
@@ -129,8 +129,8 @@ Sorted by CPU and memory, expandable down to each app's main process and its hel
 App size analysis
 Measures what every installed app actually occupies on disk, largest first. Developer tools like Xcode are routinely the biggest thing on a Mac, and the easiest to overlook.
 
-App uninstaller
-Removes an app and the preferences and support files it left behind. App Store apps included.
+About removing apps
+The App Store edition runs inside the macOS sandbox and cannot remove apps — a platform limit that no permission lifts. The size analysis above works as usual, so you can still see where your space goes; to actually uninstall something, drag it to the Trash in Finder.
 
 Cache cleaning: authorize once, valid for good
 This part works differently from other cleaners, and here is why:

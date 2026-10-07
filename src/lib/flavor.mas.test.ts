@@ -41,6 +41,24 @@ describe("能力门禁：MAS 版不得出现用不了的入口", () => {
     expect(can("appSizeAnalysis")).toBe(true);
   });
 
+  it("MAS 不能卸载应用 —— 卸载要 exec osascript 并写 /Applications", async () => {
+    // 沙箱只允许 exec 自己 bundle 里的二进制（osascript 起不来），
+    // 且 /Applications 与 ~/Library/Application Support 不在授权范围内。
+    // 露出来的后果：用户勾选、确认，然后拿到一条失败记录。
+    // 注意 appSizeAnalysis 仍为 true —— 看体积是只读的，成立。
+    const { can } = await importFlavor();
+    expect(can("appUninstall")).toBe(false);
+    expect(can("appSizeAnalysis")).toBe(true);
+  });
+
+  it("完整版保留卸载能力 —— 门禁不能把主产品削掉", async () => {
+    const { capabilitiesOf } = (await import("@/lib/flavor")) as unknown as {
+      capabilitiesOf: (f: string) => readonly string[];
+    };
+    expect(capabilitiesOf("developer_id")).toContain("appUninstall");
+    expect(capabilitiesOf("mas")).not.toContain("appUninstall");
+  });
+
   it("MAS 不能清理 Docker 缓存 —— 要 exec `docker` CLI，沙箱做不到", async () => {
     // 缓存页底部那节「Docker 缓存与资源」。它要跑 `docker system df` 之类
     // 的外部命令，沙箱里必然拿不到 inventory —— 露出来就是一整块死 UI，

@@ -73,6 +73,21 @@ export type Capability =
   | "cacheClean"
   /** 应用体积 / 架构分析 */
   | "appSizeAnalysis"
+  /**
+   * 卸载应用（连同它留下的支持文件）。
+   *
+   * 与 `appSizeAnalysis` 分开：**看体积**在沙箱里成立（只读 /Applications），
+   * 而**删应用**不成立。卸载的每一步都要越过沙箱：
+   * - `osascript` 起不来 —— 沙箱只允许 exec 自己 bundle 里的二进制
+   *   （同 Cargo.toml 里 `plist` 那条注释说的原因，`plutil` 因此不可用）
+   * - 即使起得来，`/Applications` 与 `~/Library/Application Support` 也不在
+   *   授权范围内，移入废纸篓需要写它们的父目录
+   *
+   * 所以 MAS 版必须把「卸载」这个动作收起来，只保留体积分析；否则用户
+   * 勾选、确认、然后拿到一条失败记录 —— 这正是本文件其它注释反复强调要
+   * 避免的「显示了但用不了」。
+   */
+  | "appUninstall"
   /** 应用内检查更新 */
   | "inAppUpdate"
   /**
@@ -101,6 +116,7 @@ const DEVELOPER_ID: readonly Capability[] = [
   "appGrouping",
   "cacheClean",
   "appSizeAnalysis",
+  "appUninstall",
   "inAppUpdate",
   "dockerCleanup",
 ];
@@ -110,6 +126,9 @@ const DEVELOPER_ID: readonly Capability[] = [
 // - inAppUpdate：MAS 由 App Store 负责更新，updater 插件整块不注册
 // - appGrouping：这一页依赖的按 .app 聚合还没接上（进程监控本身是好的），
 //   放出来就是一个空页面
+// - appUninstall：卸载要 exec osascript 并写 /Applications，沙箱里两条都做不到。
+//   注意 `appSizeAnalysis` **仍在** MAS 里 —— 看体积是只读的，成立；
+//   这一页因此保留，只是收起「卸载」动作（见 UninstallerView）。
 // - dockerCleanup：要 exec `docker` CLI，沙箱里拿不到 inventory
 const MAS: readonly Capability[] = [
   "processMonitor",

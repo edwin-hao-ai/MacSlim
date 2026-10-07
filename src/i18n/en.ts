@@ -673,6 +673,7 @@ export const en: Dict = {
     residueSize: "Residue size",
     totalSize: "Total size",
     search: "Search app name or Bundle ID...",
+    sandboxNotice: "The App Store edition runs inside the macOS sandbox and cannot remove apps — a platform limit that no permission lifts. This page still shows how much space each app occupies, largest first.",
     hideSystem: "Hide system apps",
     systemApp: "Core system app, not recommended to uninstall",
     selectedCount: "{count} apps selected",

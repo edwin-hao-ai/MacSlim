@@ -28,6 +28,7 @@ import {
 import { fmtBytes } from "@/lib/format";
 import OperationConfirm from "@/components/OperationConfirm";
 import ScanStageProgress from "@/components/ScanStageProgress";
+import { can } from "@/lib/flavor";
 import { useI18n } from "@/i18n";
 import {
   Search,
@@ -355,6 +356,15 @@ const UninstallerView: Component = () => {
 
   const AppListView = () => (
     <div class="flex flex-col h-full">
+      <Show when={!can("appUninstall")}>
+        {/* App Store 版收起了「卸载」动作：沙箱里 exec 不了 osascript，
+            也写不了 /Applications 与 ~/Library/Application Support。
+            体积分析是只读的、照常可用，所以这一页保留，只说明少掉的是什么
+            —— 与进程页对「终止」的处理同一套口径。 */}
+        <div class="mx-6 mt-4 rounded-lg bg-brand-500/8 border border-brand-500/20 px-4 py-3 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+          {t("uninstaller.sandboxNotice")}
+        </div>
+      </Show>
       <div class="px-6 py-4 border-b border-black/5 dark:border-white/5 flex items-center gap-4">
         <label class="inline-flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 cursor-pointer">
           <input
@@ -417,10 +427,12 @@ const UninstallerView: Component = () => {
               <div
                 class="card p-4 transition-all duration-200 hover:scale-[1.01] hover:shadow-md cursor-pointer"
                 classList={{ "ring-2 ring-brand-500/50": isSelected() }}
-                onClick={() => !app.is_system && toggleApp(app.selection_key)}
+                onClick={() =>
+                  can("appUninstall") && !app.is_system && toggleApp(app.selection_key)
+                }
               >
                 <div class="flex items-center gap-3">
-                  <Show when={!app.is_system}>
+                  <Show when={can("appUninstall") && !app.is_system}>
                     <input
                       type="checkbox"
                       checked={isSelected()}
@@ -465,7 +477,7 @@ const UninstallerView: Component = () => {
         </For>
       </div>
 
-      <Show when={selectedApps().size > 0}>
+      <Show when={can("appUninstall") && selectedApps().size > 0}>
         <div class="px-6 py-3 border-t border-black/5 dark:border-white/5 flex items-center gap-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm">
           <span class="text-sm text-zinc-600 dark:text-zinc-300">
             {t("uninstaller.selectedCount", { count: selectedApps().size })}
