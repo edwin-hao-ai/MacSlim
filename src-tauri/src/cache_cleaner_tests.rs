@@ -273,3 +273,33 @@ fn the_cleanup_expander_uses_the_real_home() {
         expected.join("Library/Logs")
     );
 }
+
+/// 清理白名单必须和扫描器用**同一个 home**。
+///
+/// 这条抓的是上架版的致命组合：扫描器走 `scanner_home()`（真实 home），
+/// 而白名单曾经走 `dirs::home_dir()`（沙箱里是应用自己的 container）。
+/// 于是待删路径 `/Users/edwinhao/Library/Logs` 永远不以白名单根
+/// `.../Containers/com.vgoapp.macslim/Data/Library/Logs` 开头，
+/// `is_cleanup_path_allowed` 恒为 false —— 界面扫得出 10.5 GB、也确认了清理，
+/// 结果是「成功 0 项，失败 1 项，释放 0」。
+///
+/// 在非沙箱的 `cargo test` 里两个 home 恰好相同，所以这条断言本身抓不到
+/// 沙箱内的差异；它的价值是**把两者钉在一起**：谁再改回 `dirs::home_dir()`，
+/// 在 MAS 构建里就会立刻不一致（`scanner_home()` 的 MAS 分支返回真实 home）。
+#[test]
+fn the_cleanup_whitelist_uses_the_real_home() {
+    let home = crate::folder_access::scanner_home();
+    let roots = allowed_cleanup_roots();
+    for expected in [
+        home.join("Library/Logs"),
+        home.join("Library/Caches"),
+        home.join(".npm"),
+        home.join(".cargo/registry/cache"),
+    ] {
+        assert!(
+            roots.contains(&expected),
+            "白名单缺少 {}（说明它没跟着 scanner_home() 走）",
+            expected.display()
+        );
+    }
+}

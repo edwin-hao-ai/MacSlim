@@ -8,22 +8,34 @@ use std::pin::Pin;
 use std::time::Instant;
 
 fn allowed_cleanup_roots() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        out.push(home.join(".npm"));
-        out.push(home.join(".cargo/registry/cache"));
-        out.push(home.join(".Trash"));
-        out.push(home.join("Library/pnpm/store"));
-        out.push(home.join("Library/Caches"));
-        out.push(home.join("Library/Logs"));
-        out.push(home.join("Library/Developer/Xcode/DerivedData"));
-        out.push(home.join("Library/Developer/Xcode/Archives"));
-        out.push(home.join("Library/Developer/Xcode/iOS DeviceSupport"));
-        out.push(home.join("Library/Developer/CoreSimulator/Caches"));
-        out.push(home.join("Library/Application Support/CrashReporter"));
-    }
-    out.push(PathBuf::from("/opt/homebrew/Library/Homebrew/cache"));
-    out
+    // 必须用 `scanner_home()` 而不是 `dirs::home_dir()`。
+    //
+    // App Store 版里 `$HOME` 指向应用自己的空 container，而扫描出来的路径在
+    // 真实 home 下（扫描器走的就是 `scanner_home()`）。两者不一致的后果不是
+    // 「白名单少一项」，而是**上架版的清理 100% 失败**：待删路径
+    // `/Users/edwinhao/Library/Logs` 永远不以白名单根
+    // `.../Containers/com.vgoapp.macslim/Data/Library/Logs` 开头，
+    // `starts_with` 恒为 false → `PATH_NOT_WHITELISTED`。
+    //
+    // 用户在界面上看到的是：扫出 10.50 GB、授权、勾选、二次确认，
+    // 然后「成功 0 项，失败 1 项，释放 0」。而 `cargo test` 里 `$HOME`
+    // 恰好就是真实 home，所以这条路径在测试里永远是绿的。
+    // 同一个坑 `expand_tilde_from` 的注释里已经写过一次，这里是漏改的那处。
+    let home = crate::folder_access::scanner_home();
+    vec![
+        home.join(".npm"),
+        home.join(".cargo/registry/cache"),
+        home.join(".Trash"),
+        home.join("Library/pnpm/store"),
+        home.join("Library/Caches"),
+        home.join("Library/Logs"),
+        home.join("Library/Developer/Xcode/DerivedData"),
+        home.join("Library/Developer/Xcode/Archives"),
+        home.join("Library/Developer/Xcode/iOS DeviceSupport"),
+        home.join("Library/Developer/CoreSimulator/Caches"),
+        home.join("Library/Application Support/CrashReporter"),
+        PathBuf::from("/opt/homebrew/Library/Homebrew/cache"),
+    ]
 }
 fn is_cleanup_path_allowed(path: &Path) -> bool {
     let canon = match path.canonicalize() {
@@ -46,7 +58,7 @@ fn is_cleanup_path_allowed(path: &Path) -> bool {
         if dangerous_literal.contains(&s) {
             return false;
         }
-        if dirs::home_dir().is_some_and(|home| Path::new(s) == home) {
+        if Path::new(s) == crate::folder_access::scanner_home() {
             return false;
         }
     }
@@ -462,7 +474,10 @@ fn is_stale_project_path(path: &Path) -> bool {
 }
 
 fn stale_project_root(path: &Path) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    // 同 `allowed_cleanup_roots()`：沙箱里 `dirs::home_dir()` 是 container，
+    // 会让「陈旧 node_modules」这类项目路径永远匹配不上（扫描器给的是真实
+    // home 下的路径）。
+    let home = crate::folder_access::scanner_home();
     STALE_PROJECT_ROOTS
         .iter()
         .map(|root| home.join(root))
@@ -600,9 +615,13 @@ fn detect_user_shell() -> String {
 }
 
 fn augmented_path_for_spawn() -> String {
-    let home = dirs::home_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
+    // 同 `allowed_cleanup_roots()`：沙箱里 `dirs::home_dir()` 是 container，
+    // 拼出来的 `~/.cargo/bin`、`~/Library/pnpm` 等全指向空目录，于是
+    // npm / cargo / brew 这些**装在真实 home 下**的工具一个都找不到，
+    // 需要调 CLI 的清理项（npm cache clean 之类）会静默失败。
+    let home = crate::folder_access::scanner_home()
+        .to_string_lossy()
+        .to_string();
 
     let candidates = [
         format!("{}/.cargo/bin", home),
@@ -641,13 +660,6 @@ fn augmented_path_for_spawn() -> String {
 }
 
 async fn remove_directory(path: &Path) -> Result<(), UserError> {
-    if !path.exists() {
-        return Ok(());
-    }
-    if !is_cleanup_path_allowed(path) {
-        return Err(pre_delete_recheck_failed(path));
-    }
-
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let trash = std::env::temp_dir().join(format!(
         "macslim-trash-{}-{}",
@@ -659,22 +671,34 @@ async fn remove_directory(path: &Path) -> Result<(), UserError> {
 
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        // 沙箱里删除用户目录**必须持有 security scope**。
+        // 进入 security scope 必须早于**任何**文件系统访问 —— 包括下面那句
+        // `path.exists()`。
         //
-        // `enter_granted_scopes()` 原本全项目只在 cache_scanner 的
-        // spawn_blocking 里被调用过一次 —— 也就是只有「扫描」这条路进过作用域。
-        // 于是 App Store 版的行为是：扫描能读（报出 10.50 GB 可释放）、清理不能
-        // 删（rename 与 remove_dir_all 都被沙箱拒绝）。实测：
+        // 这是 2bcbbcf 漏掉的一半：那次只把 scope 加到了 rename 之前，而
+        // `exists()` 与 `is_cleanup_path_allowed()`（内部 `canonicalize()`）
+        // 仍在作用域之外。沙箱下它们被拒 → `canonicalize` 失败 →
+        // `is_cleanup_path_allowed` 返回 false → 清理**必然**失败，报的还是
+        // 「路径不在白名单内」这种把人引向错误方向的理由。实测日志：
         //
-        //     历史：成功 0 项，失败 1 项，释放 0
+        //     Sandbox: macslim deny(1) file-read-data /Users/edwinhao/Library/Logs
         //
-        // 用户看到的是「授权了、选中了、确认了，然后什么都没删」。
+        // 用户表现仍是「授权了、选中了、确认了，然后什么都没删」。
         //
-        // 为什么放在这个闭包**内部**：SecurityScope 里是一个 ObjC NSURL，不是
-        // Send，跨 `.await` 持有会让 future 失去 Send，而命令宏要求 Future + Send。
-        // 在阻塞任务里进入、随闭包结束析构，start/stop 依然严格配对，又不碰
-        // Send 边界 —— 与 cache_scanner 里那段是同一个理由。
+        // 为什么整段都在这个闭包里：SecurityScope 里是一个 ObjC NSURL，不是
+        // Send，跨 `.await` 持有会让 future 失去 Send，而命令宏要求
+        // Future + Send。在阻塞任务里进入、随闭包结束析构，start/stop 严格
+        // 配对，又不碰 Send 边界。
         let _granted_scopes = crate::folder_access::enter_granted_scopes();
+
+        if !path.exists() {
+            return Ok(());
+        }
+        if !is_cleanup_path_allowed(&path) {
+            let error = pre_delete_recheck_failed(&path);
+            log_cleanup_failure(&path, &error);
+            return Err(error);
+        }
+
         match std::fs::rename(&path, &trash) {
             Ok(_) => {
                 std::thread::spawn(move || {
@@ -682,13 +706,17 @@ async fn remove_directory(path: &Path) -> Result<(), UserError> {
                 });
                 Ok(())
             }
-            Err(_) => std::fs::remove_dir_all(&path).map_err(|e| {
-                UserError::one(
+            // rename 失败通常只是跨设备或目标已存在，紧接着的 remove_dir_all
+            // 才是真正的兜底；要报的是**它**的错误，所以这里不绑定 rename 的。
+            Err(_) => clear_directory_contents(&path).map_err(|e| {
+                let error = UserError::one(
                     ErrorCode::DELETE_FAILED,
                     format!("删除失败: {e}"),
                     "reason",
                     e,
-                )
+                );
+                log_cleanup_failure(&path, &error);
+                error
             }),
         }
     })
@@ -701,6 +729,51 @@ async fn remove_directory(path: &Path) -> Result<(), UserError> {
             e,
         )
     })?
+}
+
+/// 清空目录内容，再尽力删掉目录本身。
+///
+/// ## 为什么不能直接 `remove_dir_all(path)`
+///
+/// security-scoped bookmark 授权的是**这个目录及其内容**，不含它的父目录。
+/// 于是「删掉目录本身」这一步要修改父目录，被沙箱拒绝：
+///
+///     Sandbox: macslim deny(1) file-write-unlink /Users/edwinhao/Library
+///     删除失败: Permission denied (os error 13)
+///
+/// 而此时内容其实**已经清空了** —— 旧代码把这当成整体失败，用户看到的是
+/// 「释放 0」，实际空间已经释放。更糟的是它会让「清理」在授权根目录上
+/// 永远报错，而 `~/Library/Logs`、`~/Library/Caches` 这些恰恰都是授权根。
+///
+/// 所以：内容清空即视为成功；目录本身删不掉就留着（这类目录本来也该存在，
+/// 系统与应用都预期它在）。
+fn clear_directory_contents(path: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let child = entry.path();
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(&child)?;
+        } else {
+            std::fs::remove_file(&child)?;
+        }
+    }
+    // 尽力删掉空目录；删不掉不算失败（父目录不在授权范围内）。
+    let _ = std::fs::remove_dir(path);
+    Ok(())
+}
+
+/// 清理失败时把**路径与原因**写进 stderr。
+///
+/// 此前失败只落一条中文摘要进历史（「成功 0 项，失败 1 项，释放 0」），
+/// 具体原因被丢掉：用户不知道该怎么办，排查的人也只能靠猜。日志里至少要有
+/// 「哪个路径、为什么」这两件事。
+fn log_cleanup_failure(path: &Path, error: &UserError) {
+    eprintln!(
+        "[macslim] 清理失败 path={} code={:?} message={}",
+        path.display(),
+        error.code,
+        error.message
+    );
 }
 
 async fn remove_directory_sudo(path: &Path) -> Result<(), UserError> {
