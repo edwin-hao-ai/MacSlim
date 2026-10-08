@@ -292,9 +292,12 @@ const runScan = async () => {
     try {
       const outcome = await executeOperation(prepared.operation_id);
       if (outcome.kind !== "cache") return;
-      setSummary(outcome.value);
       setCleanProgress(1);
+      // 先刷新列表再落结果：runScan 开头会 setSummary(null)，若先落结果会被
+      // 这次重扫清掉，诚实结果区（「实测释放」/「已删除（未能测量释放）」）
+      // 将永远不可见。用户点「重新扫描」时 runScan 仍会正常清掉旧结果。
       await runScan();
+      setSummary(outcome.value);
       const reclaimed = outcome.value.reclaimed_bytes;
       await notifyCleanComplete(
         reclaimed,

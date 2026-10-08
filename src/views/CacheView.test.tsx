@@ -45,7 +45,17 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 vi.mock("@/components/DockerSection", () => ({ default: () => <div /> }));
 vi.mock("@/components/CleanupFlash", () => ({ default: () => <div /> }));
 vi.mock("@/lib/cleanFeedback", () => ({
-  animateNumber: () => () => undefined,
+  // 立即把目标值写回：真实实现走 requestAnimationFrame 补间，测试里无法等待
+  // 动画结束，直接落到终值才能断言结果数字。
+  animateNumber: (
+    _from: number,
+    to: number,
+    _durationMs: number,
+    onUpdate: (value: number) => void,
+  ) => {
+    onUpdate(to);
+    return () => undefined;
+  },
   playCleanStartSound: vi.fn(),
   playCleanSuccessSound: vi.fn(),
   playCleanFailureSound: vi.fn(),
@@ -299,6 +309,61 @@ describe("CacheView broker flow", () => {
       mocks.scanCache.mock.invocationCallOrder[1],
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it("未能测量释放量时，结果口径只报「已删除」，绝不冒充「已释放」", async () => {
+    mocks.prepareOperation.mockResolvedValue(prepared);
+    mocks.executeOperation.mockResolvedValue({
+      kind: "cache",
+      value: {
+        reports: [],
+        deleted_bytes: 2048,
+        reclaimed_bytes: null,
+        success_count: 1,
+        fail_count: 0,
+      },
+    });
+
+    render(() => <CacheView />);
+    await screen.findByText("cache.item.npmCache");
+    fireEvent.click(screen.getByText("cache.cleanCta"));
+    await confirmRun();
+
+    // 诚实分支：结果区标签是「已删除（未能测量释放）」
+    expect(await screen.findByText("cache.deletedUnmeasuredLabel")).toBeTruthy();
+    // 绝不能出现「本次释放」这个标签（更不许把删除量说成释放）
+    expect(screen.queryByText("cache.releaseLabel")).toBeNull();
+    // 头部大数字展示的是**已删除**的字节数，而不是释放量
+    expect(screen.getByText("2.0 KB")).toBeTruthy();
+    // 汇总卡也必须走「已删除」文案，不得复用「清理完成，释放」
+    expect(screen.queryByText("cache.cleanSuccess")).toBeNull();
+    expect(screen.getByText("cache.cleanSuccessDeleted")).toBeTruthy();
+  });
+
+  it("测量到释放量时，结果口径显示「本次释放」与该数字", async () => {
+    mocks.prepareOperation.mockResolvedValue(prepared);
+    mocks.executeOperation.mockResolvedValue({
+      kind: "cache",
+      value: {
+        reports: [],
+        deleted_bytes: 2048,
+        reclaimed_bytes: 4096,
+        success_count: 1,
+        fail_count: 0,
+      },
+    });
+
+    render(() => <CacheView />);
+    await screen.findByText("cache.item.npmCache");
+    fireEvent.click(screen.getByText("cache.cleanCta"));
+    await confirmRun();
+
+    // 有实测值：标签是「本次释放」+ 实测数字
+    expect(await screen.findByText("cache.releaseLabel")).toBeTruthy();
+    expect(screen.queryByText("cache.deletedUnmeasuredLabel")).toBeNull();
+    expect(screen.getByText("4.0 KB")).toBeTruthy();
+    expect(screen.getByText("cache.cleanSuccess")).toBeTruthy();
+    expect(screen.queryByText("cache.cleanSuccessDeleted")).toBeNull();
   });
 
   it("never puts raw path or command on the wire", async () => {
