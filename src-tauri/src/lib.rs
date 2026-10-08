@@ -28,6 +28,7 @@ pub mod storage;
 pub mod tray;
 pub mod uninstaller;
 pub mod user_error;
+pub mod volume;
 pub mod whitelist;
 
 // CLI-friendly re-exports
