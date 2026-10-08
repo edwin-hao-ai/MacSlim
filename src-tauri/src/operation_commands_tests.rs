@@ -271,7 +271,8 @@ pub(crate) fn uninstall_report(app_name: &str) -> UninstallReport {
     UninstallReport {
         app_name: app_name.to_owned(),
         bundle_id: format!("com.example.{app_name}"),
-        total_freed_bytes: 2_048,
+        trashed_bytes: 2_048,
+        reclaimed_bytes: None,
         moved_count: 1,
         failed_count: 0,
         details: vec![MoveResult {

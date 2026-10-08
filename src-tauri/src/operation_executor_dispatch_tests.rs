@@ -92,7 +92,8 @@ impl UninstallDomain for CountingUninstall {
             UninstallReport {
                 app_name: "Alpha".to_owned(),
                 bundle_id: "com.example.Alpha".to_owned(),
-                total_freed_bytes: 0,
+                trashed_bytes: 0,
+                reclaimed_bytes: None,
                 moved_count: 0,
                 failed_count: 0,
                 details: Vec::new(),

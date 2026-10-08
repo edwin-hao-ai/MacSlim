@@ -136,7 +136,8 @@ impl UninstallDomain for FakeUninstallDomain {
         let report = UninstallReport {
             app_name: app.app_name.clone(),
             bundle_id: app.bundle_id.clone(),
-            total_freed_bytes: residues.iter().map(|residue| residue.size_bytes).sum(),
+            trashed_bytes: residues.iter().map(|residue| residue.size_bytes).sum(),
+            reclaimed_bytes: None,
             moved_count: residues.len(),
             failed_count: 0,
             details: residues
@@ -245,7 +246,7 @@ async fn uninstall_plan_revalidates_then_dispatches_typed_remove() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].app_name, "alpha");
     assert_eq!(reports[0].bundle_id, "com.example.alpha");
-    assert_eq!(reports[0].total_freed_bytes, 64);
+    assert_eq!(reports[0].trashed_bytes, 64);
     assert_eq!(domain.removed_paths(), vec![library_path("alpha-cache")]);
     assert!(domain.quit_calls.lock().unwrap().is_empty());
 }

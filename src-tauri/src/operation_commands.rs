@@ -544,12 +544,14 @@ fn cache_entry(operation: String, summary: &CleanSummary) -> OperationHistoryEnt
 }
 
 fn uninstall_entry(operation: String, reports: &[UninstallReport]) -> OperationHistoryEntry {
+    let trashed: u64 = reports
+        .iter()
+        .map(|report| report.trashed_bytes)
+        .fold(0, u64::saturating_add);
     OperationHistoryEntry {
         operation,
         target: format!("{} 个应用", reports.len()),
-        freed_bytes: reports.iter().fold(0_u64, |total, report| {
-            total.saturating_add(report.total_freed_bytes)
-        }),
+        freed_bytes: trashed,
         success: reports.iter().all(|report| report.failed_count == 0),
         detail: format!(
             "移动 {} 项，失败 {} 项",
@@ -561,10 +563,11 @@ fn uninstall_entry(operation: String, reports: &[UninstallReport]) -> OperationH
         fail_count: reports.iter().map(|r| r.failed_count).sum::<usize>() as u64,
         reason_code: String::new(),
         deleted_bytes: 0,
-        trashed_bytes: reports.iter().fold(0_u64, |total, report| {
-            total.saturating_add(report.total_freed_bytes)
-        }),
-        reclaimed_bytes: None,
+        trashed_bytes: trashed,
+        reclaimed_bytes: reports
+            .iter()
+            .filter_map(|report| report.reclaimed_bytes)
+            .reduce(|a, b| a.saturating_add(b)),
     }
 }
 

@@ -119,7 +119,8 @@ impl UninstallDomain for NoopUninstall {
             UninstallReport {
                 app_name: String::new(),
                 bundle_id: String::new(),
-                total_freed_bytes: 0,
+                trashed_bytes: 0,
+                reclaimed_bytes: None,
                 moved_count: 0,
                 failed_count: 0,
                 details: Vec::new(),

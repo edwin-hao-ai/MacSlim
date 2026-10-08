@@ -43,7 +43,10 @@ pub struct MoveResult {
 pub struct UninstallReport {
     pub app_name: String,
     pub bundle_id: String,
-    pub total_freed_bytes: u64,
+    /// 移入废纸篓的体积之和：文件在废纸篓里，**尚未真正释放**。
+    pub trashed_bytes: u64,
+    /// 卷可用空间的实测增量；`None` 表示未能测量（区别于 0）。
+    pub reclaimed_bytes: Option<u64>,
     pub moved_count: usize,
     pub failed_count: usize,
     pub details: Vec<MoveResult>,
@@ -139,12 +142,14 @@ pub(crate) async fn uninstall_app(target: &UninstallTarget) -> UninstallReport {
     all_paths.push(target.bundle_path.clone());
     all_paths.extend(target.residue_paths.iter().cloned());
 
+    let before = crate::volume::VolumeCapacity::read();
     let (mut details, needs_admin) = trash_with_user_permission(&all_paths).await;
     if !needs_admin.is_empty() {
         details.extend(trash_with_admin(&needs_admin).await);
     }
+    let after = crate::volume::VolumeCapacity::read();
 
-    build_report(target, details)
+    build_report(target, details, crate::volume::reclaimed(before, after))
 }
 
 async fn trash_with_user_permission(all_paths: &[String]) -> (Vec<MoveResult>, Vec<(String, u64)>) {
@@ -413,15 +418,20 @@ fn compute_size(path: &Path) -> u64 {
 }
 
 /// 从移动结果列表构建卸载报告
-fn build_report(target: &UninstallTarget, details: Vec<MoveResult>) -> UninstallReport {
+fn build_report(
+    target: &UninstallTarget,
+    details: Vec<MoveResult>,
+    reclaimed_bytes: Option<u64>,
+) -> UninstallReport {
     let moved_count = details.iter().filter(|d| d.success).count();
     let failed_count = details.iter().filter(|d| !d.success).count();
-    let total_freed_bytes: u64 = details.iter().map(|d| d.size_bytes).sum();
+    let trashed_bytes: u64 = details.iter().map(|d| d.size_bytes).sum();
 
     UninstallReport {
         app_name: target.app_name.clone(),
         bundle_id: target.bundle_id.clone(),
-        total_freed_bytes,
+        trashed_bytes,
+        reclaimed_bytes,
         moved_count,
         failed_count,
         details,
