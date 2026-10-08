@@ -578,7 +578,7 @@ fn docker_entry(
     OperationHistoryEntry {
         operation,
         target: format!("Docker {}", report.action),
-        freed_bytes: 0,
+        freed_bytes: report.reclaimed_bytes.unwrap_or(0),
         success: report.failed.is_empty(),
         detail: format!(
             "成功 {} 项，失败 {} 项",
@@ -591,7 +591,7 @@ fn docker_entry(
         reason_code: String::new(),
         deleted_bytes: 0,
         trashed_bytes: 0,
-        reclaimed_bytes: None,
+        reclaimed_bytes: report.reclaimed_bytes,
     }
 }
 

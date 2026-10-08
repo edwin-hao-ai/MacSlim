@@ -98,6 +98,42 @@ fn uninstall_history_entry_keeps_null_reclaimed_when_unmeasured() {
     assert_eq!(entry.reclaimed_bytes, None);
 }
 
+#[test]
+fn docker_history_entry_carries_measured_reclaimed() {
+    let outcome = OperationOutcome::Docker(DockerExecutionReport {
+        action: "清理 Docker".to_owned(),
+        succeeded: vec!["nginx:latest".to_owned()],
+        failed: Vec::new(),
+        output: String::new(),
+        reclaimed_bytes: Some(4_500_000),
+    });
+
+    let entry = history_entry(&outcome);
+
+    // Docker 清理没有「删除字节」与「废纸篓」口径，只有卷容量实测。
+    assert_eq!(entry.deleted_bytes, 0);
+    assert_eq!(entry.trashed_bytes, 0);
+    assert_eq!(entry.freed_bytes, 4_500_000);
+    assert_eq!(entry.reclaimed_bytes, Some(4_500_000));
+}
+
+#[test]
+fn docker_history_entry_keeps_null_reclaimed_when_unmeasured() {
+    let outcome = OperationOutcome::Docker(DockerExecutionReport {
+        action: "清理 Docker".to_owned(),
+        succeeded: Vec::new(),
+        failed: Vec::new(),
+        output: String::new(),
+        reclaimed_bytes: None,
+    });
+
+    let entry = history_entry(&outcome);
+
+    // 测不出就报 0 兼容列 + null 实测列，绝不把未知伪装成「释放了 0」。
+    assert_eq!(entry.freed_bytes, 0);
+    assert_eq!(entry.reclaimed_bytes, None);
+}
+
 #[tokio::test]
 async fn execute_operation_routes_docker_plan_to_docker_domain() {
     let mut harness = Harness::new();

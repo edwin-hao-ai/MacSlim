@@ -67,6 +67,8 @@ pub struct DockerExecutionReport {
     pub succeeded: Vec<String>,
     pub failed: Vec<(String, String)>,
     pub output: String,
+    /// 卷可用空间的实测增量；`None` 表示未能测量。
+    pub reclaimed_bytes: Option<u64>,
 }
 
 impl DockerExecutionReport {
@@ -76,6 +78,7 @@ impl DockerExecutionReport {
             succeeded: Vec::new(),
             failed: Vec::new(),
             output: String::new(),
+            reclaimed_bytes: None,
         }
     }
 }

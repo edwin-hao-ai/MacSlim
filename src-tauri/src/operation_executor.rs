@@ -636,6 +636,7 @@ async fn run_docker<D: DockerDomain + ?Sized>(
         ));
     }
     revalidate_docker_targets(&targets, &live)?;
+    let before = crate::volume::VolumeCapacity::read();
     let mut report = DockerExecutionReport::new(action);
     for target in targets {
         match domain.remove(action, &target).await {
@@ -643,6 +644,8 @@ async fn run_docker<D: DockerDomain + ?Sized>(
             Err(error) => report.failed.push((target.name.clone(), error.message)),
         }
     }
+    let after = crate::volume::VolumeCapacity::read();
+    report.reclaimed_bytes = crate::volume::reclaimed(before, after);
     Ok(report)
 }
 
@@ -658,9 +661,12 @@ async fn execute_docker_prune<D: DockerDomain + ?Sized>(
             "Docker 资源清单已变化，请重新扫描后再清理",
         ));
     }
+    let before = crate::volume::VolumeCapacity::read();
     let output = domain.prune().await?;
+    let after = crate::volume::VolumeCapacity::read();
     let mut report = DockerExecutionReport::new(DockerAction::Prune);
     report.output = output;
+    report.reclaimed_bytes = crate::volume::reclaimed(before, after);
     Ok(report)
 }
 
