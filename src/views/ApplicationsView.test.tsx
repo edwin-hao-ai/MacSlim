@@ -453,7 +453,7 @@ describe("ApplicationsView broker flow", () => {
   it("ignores a graceful result tagged as another operation kind", async () => {
     mocks.executeOperation.mockResolvedValue({
       kind: "cache",
-      value: { reports: [], total_freed_bytes: 0, success_count: 0, fail_count: 0 },
+      value: { reports: [], deleted_bytes: 0, reclaimed_bytes: null, success_count: 0, fail_count: 0 },
     });
     render(() => <ApplicationsView />);
     await screen.findByText("Notes");

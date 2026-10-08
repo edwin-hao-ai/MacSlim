@@ -82,7 +82,13 @@ const prepared = {
 
 const dockerResult = {
   kind: "docker",
-  value: { action: "remove_image", succeeded: ["nginx:latest"], failed: [], output: "" },
+  value: {
+    action: "remove_image",
+    succeeded: ["nginx:latest"],
+    failed: [],
+    output: "",
+    reclaimed_bytes: null,
+  },
 };
 
 const confirmDialog = () => screen.findByTestId("operation-confirm-validity");
@@ -146,7 +152,7 @@ describe("DockerSection broker flow", () => {
     mocks.prepareOperation.mockResolvedValue({ ...prepared, operation_id: "op-prune" });
     mocks.executeOperation.mockResolvedValue({
       kind: "docker",
-      value: { action: "prune", succeeded: [], failed: [], output: "Total reclaimed space: 0B" },
+      value: { action: "prune", succeeded: [], failed: [], output: "Total reclaimed space: 0B", reclaimed_bytes: null },
     });
 
     render(() => <DockerSection />);
@@ -232,7 +238,7 @@ describe("DockerSection broker flow", () => {
   it("ignores a result tagged as another operation kind", async () => {
     mocks.executeOperation.mockResolvedValue({
       kind: "cache",
-      value: { reports: [], total_freed_bytes: 0, success_count: 0, fail_count: 0 },
+      value: { reports: [], deleted_bytes: 0, reclaimed_bytes: null, success_count: 0, fail_count: 0 },
     });
 
     render(() => <DockerSection />);

@@ -21,6 +21,15 @@ export const zhCN = {
     notice_irreversible: "此操作不可撤销，请确认后执行",
   },
 
+  // 结果口径（跨页复用的诚实文案）。
+  // `reclaimed` 只在实测到回收量时出现；`null`（未能测量）绝不冒充释放，
+  // 只说「已删除 / 已移入废纸篓，尚未释放」。
+  result: {
+    reclaimed: "实测释放 {size}",
+    deletedUnmeasured: "已删除 {count} 项（未能测量释放）",
+    trashedPending: "已移入废纸篓 {size}，尚未释放",
+  },
+
   // 导航
   nav: {
     scan: "智能扫描",
@@ -376,8 +385,11 @@ export const zhCN = {
     preparingHint: "正在逐项测算实际可释放空间，缓存项多时需要十几秒",
     clean: "清理",
     cleanSuccess: "清理完成，释放 {size}",
+    // 未能测量释放量时的诚实文案：只报「已删除」，不报「释放」。
+    cleanSuccessDeleted: "清理完成，已删除 {size}（未能测量释放）",
     cleanSuccessDetail: "成功 {count} 项，失败 {failed} 项",
     releaseLabel: "本次释放",
+    deletedUnmeasuredLabel: "已删除（未能测量释放）",
     successItems: "成功 {count} 项",
     failItems: "失败 {count} 项",
     groupCount: "{count} 项 · {size}",
@@ -389,6 +401,7 @@ export const zhCN = {
     partialFail: "部分项目清理失败",
     notifyTitle: "MacSlim 清理完成",
     notifyBody: "已释放 {size}，共清理 {count} 项",
+    notifyBodyUnmeasured: "已清理 {count} 项，未能测量释放空间",
 
     // 缓存项文案由后端按 key 下发（CacheItem.label_key / description_key），
     // 这里只做翻译。中文侧的取值是原样搬过来的既有文案，不要顺手改写。

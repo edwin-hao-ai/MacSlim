@@ -63,7 +63,19 @@ function isNotifyEnabled(): boolean {
   }
 }
 
-async function notifyCleanComplete(bytes: number, count: number) {
+/**
+ * 清理完成通知。
+ *
+ * `reclaimed` 是实测回收量：能测到就报「已释放 {size}」，测不到（null）就
+ * 只说「已清理 {count} 项，未能测量释放空间」—— 绝不把删除量冒充成释放量。
+ * `deleted` 仅在测量失败时有意义（当前文案未用到，留在签名里备将来精确化），
+ * 因此以 `_` 前缀标注，避免 `noUnusedParameters` 报错。
+ */
+async function notifyCleanComplete(
+  reclaimed: number | null,
+  _deleted: number,
+  count: number,
+) {
   if (!isNotifyEnabled()) return;
   const t = getT();
   try {
@@ -74,7 +86,10 @@ async function notifyCleanComplete(bytes: number, count: number) {
     if (!granted) return;
     sendNotification({
       title: t("cache.notifyTitle"),
-      body: t("cache.notifyBody", { size: fmtBytes(bytes), count }),
+      body:
+        reclaimed != null
+          ? t("cache.notifyBody", { size: fmtBytes(reclaimed), count })
+          : t("cache.notifyBodyUnmeasured", { count }),
     });
   } catch {
     /* noop */
@@ -280,8 +295,10 @@ const runScan = async () => {
       setSummary(outcome.value);
       setCleanProgress(1);
       await runScan();
+      const reclaimed = outcome.value.reclaimed_bytes;
       await notifyCleanComplete(
-        outcome.value.total_freed_bytes,
+        reclaimed,
+        outcome.value.deleted_bytes,
         outcome.value.success_count,
       );
       if (outcome.value.success_count > 0) {
@@ -304,7 +321,7 @@ const runScan = async () => {
   };
 
   createEffect(() => {
-    const freed = summary()?.total_freed_bytes ?? 0;
+    const freed = summary()?.reclaimed_bytes ?? 0;
     cancelBytesAnimation?.();
     cancelBytesAnimation = animateNumber(
       displayFreedBytes(),
@@ -398,10 +415,14 @@ const runScan = async () => {
             <Show when={summary() && !cleaning()}>
               <div class="mt-4">
                 <div class="text-[11px] uppercase tracking-[0.16em] text-success-600 dark:text-success-400">
-                  {t("cache.releaseLabel")}
+                  {summary()!.reclaimed_bytes != null
+                    ? t("cache.releaseLabel")
+                    : t("cache.deletedUnmeasuredLabel")}
                 </div>
                 <div class="mt-1 text-4xl font-bold tabular-nums text-success-600 clean-result-number">
-                  {fmtBytes(displayFreedBytes())}
+                  {summary()!.reclaimed_bytes != null
+                    ? fmtBytes(displayFreedBytes())
+                    : fmtBytes(summary()!.deleted_bytes)}
                 </div>
                 <div class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
                   {t("cache.cleanSuccessDetail", {
@@ -450,9 +471,13 @@ const runScan = async () => {
               </div>
               <div>
                 <div class="font-semibold">
-                  {t("cache.cleanSuccess", {
-                    size: fmtBytes(s().total_freed_bytes),
-                  })}
+                  {s().reclaimed_bytes != null
+                    ? t("cache.cleanSuccess", {
+                        size: fmtBytes(s().reclaimed_bytes!),
+                      })
+                    : t("cache.cleanSuccessDeleted", {
+                        size: fmtBytes(s().deleted_bytes),
+                      })}
                 </div>
                 <div class="text-xs text-zinc-500">
                   {t("cache.successItems", { count: s().success_count })}

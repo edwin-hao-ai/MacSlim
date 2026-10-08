@@ -96,14 +96,22 @@ const DockerSection: Component = () => {
       );
       return;
     }
+    // 诚实口径：只有实测到回收量时才追加数字；`null`（未能测量）不显示。
+    const reclaimed = outcome.value.reclaimed_bytes;
+    const reclaimNote =
+      reclaimed != null
+        ? `\n${t("result.reclaimed", { size: fmtBytes(reclaimed) })}`
+        : "";
     if (action === "prune") {
       setMessage(
-        outcome.value.output.split("\n").slice(-3).join("\n").trim() ||
-          t("docker.pruneDone"),
+        (outcome.value.output.split("\n").slice(-3).join("\n").trim() ||
+          t("docker.pruneDone")) + reclaimNote,
       );
       return;
     }
-    setMessage(t("docker.done", { count: outcome.value.succeeded.length }));
+    setMessage(
+      t("docker.done", { count: outcome.value.succeeded.length }) + reclaimNote,
+    );
   };
 
   const executePending = async () => {

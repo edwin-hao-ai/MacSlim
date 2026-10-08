@@ -94,7 +94,8 @@ export type CleanReport = {
   label_key: string;
   label_params: I18nParams;
   success: boolean;
-  freed_bytes: number;
+  /** 实际删除的字节数。**不等于释放**：删除成功不代表磁盘空间已回收。 */
+  deleted_bytes: number;
   duration_ms: number;
   /** 失败原因：结构化错误（`error.<code>` 查词典），不是裸中文串。 */
   error: TauriError | null;
@@ -102,7 +103,13 @@ export type CleanReport = {
 
 export type CleanSummary = {
   reports: CleanReport[];
-  total_freed_bytes: number;
+  /** 实际删除的字节数（诚实口径，不再用扫描体积冒充释放）。 */
+  deleted_bytes: number;
+  /**
+   * 实测回收的字节数：删除前后同一磁盘卷可用空间之差。
+   * `null` = 未能测量（例如删除项不在同一卷 / 读取失败），**不得伪装成 0**。
+   */
+  reclaimed_bytes: number | null;
   success_count: number;
   fail_count: number;
 };
@@ -132,7 +139,13 @@ export type MoveResult = {
 export type UninstallReport = {
   app_name: string;
   bundle_id: string;
-  total_freed_bytes: number;
+  /** 已移入废纸篓的字节数。文件还在废纸篓里，**尚未释放**。 */
+  trashed_bytes: number;
+  /**
+   * 实测回收的字节数；`null` = 未能测量（移入废纸篓不改变已用空间，
+   * 通常为 null），**不得伪装成 0**。
+   */
+  reclaimed_bytes: number | null;
   moved_count: number;
   failed_count: number;
   details: MoveResult[];
@@ -150,6 +163,11 @@ export type DockerExecutionReport = {
   succeeded: string[];
   failed: [string, string][];
   output: string;
+  /**
+   * 实测回收的字节数：操作前后同一磁盘卷可用空间之差。
+   * `null` = 未能测量（例如报告未采集 / 读取失败），**不得伪装成 0**。
+   */
+  reclaimed_bytes: number | null;
 };
 
 export type OperationResult =
@@ -693,6 +711,10 @@ export type HistoryEntry = {
   operation: string;
   /** 拼好的中文文本，旧数据与兜底用；界面优先用下面的结构化字段。 */
   target: string;
+  /**
+   * 旧字段：缓存=deleted_bytes、卸载=trashed_bytes、docker=实测释放（无则 0）。
+   * 仅兜底，新界面按 operation 用下面的诚实口径字段。
+   */
   freed_bytes: number;
   success: boolean;
   /** 同上，中文文本兜底。 */
@@ -703,6 +725,12 @@ export type HistoryEntry = {
   fail_count: number;
   /** 失败原因的错误码（`error.<code>` 词条）；空串表示无。 */
   reason_code: string;
+  /** 缓存清理：实际删除的字节数。 */
+  deleted_bytes: number;
+  /** 卸载：已移入废纸篓的字节数。 */
+  trashed_bytes: number;
+  /** 实测回收的字节数；`null` = 未能测量，不得伪装成 0。 */
+  reclaimed_bytes: number | null;
 };
 
 export async function getHistory(limit = 200): Promise<HistoryEntry[]> {

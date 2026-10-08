@@ -160,7 +160,8 @@ const uninstallResult = (quitError: string | null = null) => ({
     {
       app_name: "Notes",
       bundle_id: "com.apple.Notes",
-      total_freed_bytes: 1_300,
+      trashed_bytes: 1_300,
+      reclaimed_bytes: null,
       moved_count: 2,
       failed_count: 0,
       details: [],

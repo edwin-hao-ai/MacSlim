@@ -21,6 +21,15 @@ export const en: Dict = {
     notice_irreversible: "This action cannot be undone",
   },
 
+  // Result wording (honest across views).
+  // `reclaimed` only appears when measured; `null` (unmeasured) never
+  // masquerades as freed space — it says "deleted / moved to Trash, not yet freed".
+  result: {
+    reclaimed: "Measured {size} reclaimed",
+    deletedUnmeasured: "Deleted {count} items (space freed unmeasured)",
+    trashedPending: "Moved to Trash: {size} — not yet freed",
+  },
+
   nav: {
     scan: "Smart Scan",
     process: "Processes",
@@ -416,8 +425,12 @@ export const en: Dict = {
     preparingHint: "Measuring actual reclaimable space item by item — takes ~15s with many items",
     clean: "Clean",
     cleanSuccess: "Cleanup complete — freed {size}",
+    // Honest wording when reclamation could not be measured: report what was
+    // deleted, never claim it as freed.
+    cleanSuccessDeleted: "Cleanup complete — deleted {size} (space freed unmeasured)",
     cleanSuccessDetail: "{count} succeeded, {failed} failed",
     releaseLabel: "Freed this run",
+    deletedUnmeasuredLabel: "Deleted (space freed unmeasured)",
     successItems: "{count} succeeded",
     failItems: "{count} failed",
     groupCount: "{count} items · {size}",
@@ -428,6 +441,7 @@ export const en: Dict = {
     partialFail: "Some items failed to clean",
     notifyTitle: "MacSlim cleanup complete",
     notifyBody: "Freed {size} across {count} items",
+    notifyBodyUnmeasured: "Cleaned {count} items; freed space could not be measured",
 
     // Sent from the backend as i18n keys (CacheItem.label_key / description_key).
     // Placeholder names must stay in sync with zh-CN.ts.

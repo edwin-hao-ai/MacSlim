@@ -323,8 +323,8 @@ const UninstallerView: Component = () => {
     }
   };
 
-  const totalFreed = createMemo(() =>
-    reports().reduce((s, r) => s + r.total_freed_bytes, 0),
+  const totalTrashed = createMemo(() =>
+    reports().reduce((s, r) => s + r.trashed_bytes, 0),
   );
   const totalMoved = createMemo(() =>
     reports().reduce((s, r) => s + r.moved_count, 0),
@@ -694,10 +694,10 @@ const UninstallerView: Component = () => {
       </div>
       <h2 class="text-lg font-semibold">{t("uninstaller.complete")}</h2>
       <div class="text-3xl font-bold tabular-nums text-success-600">
-        {fmtBytes(totalFreed())}
+        {fmtBytes(totalTrashed())}
       </div>
       <div class="text-sm text-zinc-500 space-y-1 text-center">
-        <div>{t("uninstaller.freedSpace", { size: fmtBytes(totalFreed()) })}</div>
+        <div>{t("result.trashedPending", { size: fmtBytes(totalTrashed()) })}</div>
         <div>{t("uninstaller.cleanedFiles", { count: totalMoved() })}</div>
         <Show when={totalFailed() > 0}>
           <div class="text-warning-600">{t("uninstaller.failedFiles", { count: totalFailed() })}</div>
