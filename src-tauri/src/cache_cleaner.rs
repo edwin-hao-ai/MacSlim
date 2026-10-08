@@ -738,8 +738,10 @@ async fn remove_directory(path: &Path) -> Result<(), UserError> {
 /// security-scoped bookmark 授权的是**这个目录及其内容**，不含它的父目录。
 /// 于是「删掉目录本身」这一步要修改父目录，被沙箱拒绝：
 ///
-///     Sandbox: macslim deny(1) file-write-unlink /Users/edwinhao/Library
-///     删除失败: Permission denied (os error 13)
+/// ```text
+/// Sandbox: macslim deny(1) file-write-unlink /Users/edwinhao/Library
+/// 删除失败: Permission denied (os error 13)
+/// ```
 ///
 /// 而此时内容其实**已经清空了** —— 旧代码把这当成整体失败，用户看到的是
 /// 「释放 0」，实际空间已经释放。更糟的是它会让「清理」在授权根目录上
