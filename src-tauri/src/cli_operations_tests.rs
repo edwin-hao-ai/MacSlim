@@ -66,12 +66,13 @@ fn clean_summary(cleaned: usize) -> CleanSummary {
                 label_key: "cache.item.npmCache".into(),
                 label_params: Vec::new(),
                 success: true,
-                freed_bytes: 128,
+                deleted_bytes: 128,
                 duration_ms: 1,
                 error: None,
             })
             .collect(),
-        total_freed_bytes: 128 * cleaned as u64,
+        deleted_bytes: 128 * cleaned as u64,
+        reclaimed_bytes: None,
         success_count: cleaned,
         fail_count: 0,
     }
@@ -252,7 +253,8 @@ async fn cache_clean_skips_scopes_without_default_safe_items() {
 
     assert_eq!(outcome.default_safe_count, 0);
     assert_eq!(outcome.summary.success_count, 0);
-    assert_eq!(outcome.summary.total_freed_bytes, 0);
+    assert_eq!(outcome.summary.deleted_bytes, 0);
+    assert_eq!(outcome.summary.reclaimed_bytes, None);
     assert!(outcome.summary.reports.is_empty());
     assert!(cleaner.batches.lock().unwrap().is_empty());
     assert!(history.entries.lock().unwrap().is_empty());

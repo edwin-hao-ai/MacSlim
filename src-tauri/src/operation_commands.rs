@@ -482,8 +482,8 @@ fn history_write_failed(
 /// 而历史详情是直接展示给用户的字符串，没有前端 i18n 这一步。
 fn cache_history_detail(summary: &CleanSummary) -> String {
     let base = format!(
-        "成功 {} 项，失败 {} 项，释放 {}",
-        summary.success_count, summary.fail_count, summary.total_freed_bytes
+        "成功 {} 项，失败 {} 项，已删除 {}",
+        summary.success_count, summary.fail_count, summary.deleted_bytes
     );
     let Some(reason) = summary
         .reports
@@ -512,7 +512,7 @@ fn cache_entry(operation: String, summary: &CleanSummary) -> OperationHistoryEnt
     OperationHistoryEntry {
         operation,
         target: format!("{} 项缓存", summary.reports.len()),
-        freed_bytes: summary.total_freed_bytes,
+        freed_bytes: summary.deleted_bytes,
         success: summary.fail_count == 0,
         detail: cache_history_detail(summary),
         item_count: summary.reports.len() as u64,

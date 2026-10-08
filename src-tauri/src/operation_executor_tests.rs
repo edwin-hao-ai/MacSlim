@@ -25,7 +25,8 @@ impl CacheCleaner for FakeCleaner {
         Box::pin(async {
             CleanSummary {
                 reports: Vec::new(),
-                total_freed_bytes: 0,
+                deleted_bytes: 0,
+                reclaimed_bytes: None,
                 success_count: 0,
                 fail_count: 0,
             }

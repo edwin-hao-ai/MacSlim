@@ -220,7 +220,8 @@ fn cache_outcome(filter: &CacheFilter, clean: bool) -> CacheCleanOutcome {
             .map(|scan| CacheCleanOutcome {
                 summary: CleanSummary {
                     reports: Vec::new(),
-                    total_freed_bytes: 0,
+                    deleted_bytes: 0,
+                    reclaimed_bytes: None,
                     success_count: 0,
                     fail_count: 0,
                 },
@@ -260,10 +261,14 @@ fn run_cache_scan(filter: CacheFilter, clean: bool) {
     }
 
     println!("开始清理 {} 项默认安全项...", outcome.default_safe_count);
-    let freed_gb = outcome.summary.total_freed_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+    let deleted = format_bytes(outcome.summary.deleted_bytes);
+    let reclaimed = match outcome.summary.reclaimed_bytes {
+        Some(bytes) => format_bytes(bytes),
+        None => "无法测量".to_owned(),
+    };
     println!(
-        "完成：成功 {} 项，失败 {} 项，估算释放 {:.2} GB",
-        outcome.summary.success_count, outcome.summary.fail_count, freed_gb
+        "完成：成功 {} 项，失败 {} 项，已删除 {}，实测释放 {}",
+        outcome.summary.success_count, outcome.summary.fail_count, deleted, reclaimed
     );
     for report in outcome.summary.reports {
         let status = if report.success { "OK" } else { "FAIL" };

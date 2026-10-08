@@ -43,7 +43,8 @@ impl CacheCleaner for CountingCache {
         Box::pin(async move {
             CleanSummary {
                 reports: Vec::new(),
-                total_freed_bytes: 0,
+                deleted_bytes: 0,
+                reclaimed_bytes: None,
                 success_count: items.len(),
                 fail_count: 0,
             }

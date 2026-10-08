@@ -93,7 +93,8 @@ pub struct CleanReport {
     pub label_key: String,
     pub label_params: Vec<(String, String)>,
     pub success: bool,
-    pub freed_bytes: u64,
+    /// 成功永久删除项的扫描体积之和。**不是**已释放空间。
+    pub deleted_bytes: u64,
     pub duration_ms: u64,
     /// 失败原因：带 `code` 的结构化错误（`error` 命名空间），不是裸中文串。
     pub error: Option<UserError>,
@@ -102,7 +103,10 @@ pub struct CleanReport {
 #[derive(Serialize, Clone, Debug)]
 pub struct CleanSummary {
     pub reports: Vec<CleanReport>,
-    pub total_freed_bytes: u64,
+    /// 成功永久删除项的扫描体积之和。**不是**已释放空间。
+    pub deleted_bytes: u64,
+    /// 卷可用空间的实测增量；读不到或低于噪声下限为 `None`。
+    pub reclaimed_bytes: Option<u64>,
     pub success_count: usize,
     pub fail_count: usize,
 }
@@ -246,6 +250,7 @@ pub(crate) async fn clean_with_runtime<R: CacheRuntime + ?Sized>(
     items: Vec<CacheItem>,
     runtime: &R,
 ) -> CleanSummary {
+    let before = crate::volume::VolumeCapacity::read();
     let mut reports = Vec::with_capacity(items.len());
     for item in items {
         let start = Instant::now();
@@ -259,17 +264,19 @@ pub(crate) async fn clean_with_runtime<R: CacheRuntime + ?Sized>(
             label_key: item.label_key.clone(),
             label_params: item.label_params.clone(),
             success,
-            freed_bytes: if success { item.size_bytes } else { 0 },
+            deleted_bytes: if success { item.size_bytes } else { 0 },
             duration_ms: start.elapsed().as_millis() as u64,
             error,
         });
     }
-    let total_freed_bytes = reports.iter().map(|report| report.freed_bytes).sum();
+    let after = crate::volume::VolumeCapacity::read();
+    let deleted_bytes = reports.iter().map(|report| report.deleted_bytes).sum();
     let success_count = reports.iter().filter(|report| report.success).count();
     CleanSummary {
         fail_count: reports.len() - success_count,
         reports,
-        total_freed_bytes,
+        deleted_bytes,
+        reclaimed_bytes: crate::volume::reclaimed(before, after),
         success_count,
     }
 }
