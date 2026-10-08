@@ -28,6 +28,9 @@ async fn execute_operation_routes_cache_plan_to_cache_domain() {
     assert_eq!(entries[0].operation, "cache");
     assert_eq!(entries[0].target, "1 项缓存");
     assert_eq!(entries[0].freed_bytes, 128);
+    assert_eq!(entries[0].deleted_bytes, 128);
+    assert_eq!(entries[0].trashed_bytes, 0);
+    assert_eq!(entries[0].reclaimed_bytes, None);
     assert!(entries[0].success);
     assert!(!entries[0].detail.is_empty());
     assert!(!entries[0].detail.contains(&prepared.operation_id));
@@ -62,6 +65,10 @@ async fn execute_operation_routes_uninstall_plan_to_uninstall_domain() {
     let entries = history.entries.lock().unwrap().clone();
     assert_eq!(entries[0].operation, "uninstall");
     assert_eq!(entries[0].target, "1 个应用");
+    // 卸载主口径走 trashed_bytes；本 Task 尚未实测 reclaimed，两者暂同源。
+    assert_eq!(entries[0].deleted_bytes, 0);
+    assert_eq!(entries[0].trashed_bytes, entries[0].freed_bytes);
+    assert_eq!(entries[0].reclaimed_bytes, None);
     assert!(!entries[0].detail.contains(&prepared.operation_id));
 }
 

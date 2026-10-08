@@ -469,6 +469,9 @@ fn history_entry(operation: &str) -> OperationHistoryEntry {
         ok_count: 1,
         fail_count: 0,
         reason_code: String::new(),
+        deleted_bytes: 0,
+        trashed_bytes: 0,
+        reclaimed_bytes: None,
     }
 }
 

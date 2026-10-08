@@ -121,6 +121,12 @@ pub struct OperationHistoryEntry {
     pub fail_count: u64,
     /// 首个失败项的错误码（`ErrorCode` 序列化名）；空串表示没有失败原因。
     pub reason_code: String,
+    /// 成功永久删除的体积之和（缓存主口径）。
+    pub deleted_bytes: u64,
+    /// 移入废纸篓的体积之和（卸载主口径，尚未释放）。
+    pub trashed_bytes: u64,
+    /// 卷可用空间的实测增量；`None` 表示未能测量（区别于 0）。
+    pub reclaimed_bytes: Option<u64>,
 }
 
 pub trait HistorySink: Send + Sync {
@@ -143,6 +149,9 @@ impl HistorySink for StorageHistory<'_> {
             entry.ok_count,
             entry.fail_count,
             &entry.reason_code,
+            entry.deleted_bytes,
+            entry.trashed_bytes,
+            entry.reclaimed_bytes,
         )?;
         Ok(())
     }
@@ -429,6 +438,9 @@ pub(crate) fn rejection_entry(kind: OperationKind, error: &str) -> OperationHist
         ok_count: 0,
         fail_count: 1,
         reason_code: ErrorCode::PRE_DELETE_RECHECK_FAILED.as_str().to_owned(),
+        deleted_bytes: 0,
+        trashed_bytes: 0,
+        reclaimed_bytes: None,
     }
 }
 
@@ -525,6 +537,9 @@ fn cache_entry(operation: String, summary: &CleanSummary) -> OperationHistoryEnt
             .and_then(|report| report.error.as_ref())
             .map(|error| error.code.as_str().to_owned())
             .unwrap_or_default(),
+        deleted_bytes: summary.deleted_bytes,
+        trashed_bytes: 0,
+        reclaimed_bytes: summary.reclaimed_bytes,
     }
 }
 
@@ -545,6 +560,11 @@ fn uninstall_entry(operation: String, reports: &[UninstallReport]) -> OperationH
         ok_count: reports.iter().map(|r| r.moved_count).sum::<usize>() as u64,
         fail_count: reports.iter().map(|r| r.failed_count).sum::<usize>() as u64,
         reason_code: String::new(),
+        deleted_bytes: 0,
+        trashed_bytes: reports.iter().fold(0_u64, |total, report| {
+            total.saturating_add(report.total_freed_bytes)
+        }),
+        reclaimed_bytes: None,
     }
 }
 
@@ -566,6 +586,9 @@ fn docker_entry(
         ok_count: report.succeeded.len() as u64,
         fail_count: report.failed.len() as u64,
         reason_code: String::new(),
+        deleted_bytes: 0,
+        trashed_bytes: 0,
+        reclaimed_bytes: None,
     }
 }
 
@@ -587,6 +610,9 @@ fn quit_entry(
         ok_count: (reports.len() - failed) as u64,
         fail_count: failed as u64,
         reason_code: String::new(),
+        deleted_bytes: 0,
+        trashed_bytes: 0,
+        reclaimed_bytes: None,
     }
 }
 
@@ -605,6 +631,9 @@ fn process_entry(operation: String, report: &ProcessKillReport) -> OperationHist
         ok_count: report.killed.len() as u64,
         fail_count: report.failed.len() as u64,
         reason_code: String::new(),
+        deleted_bytes: 0,
+        trashed_bytes: 0,
+        reclaimed_bytes: None,
     }
 }
 

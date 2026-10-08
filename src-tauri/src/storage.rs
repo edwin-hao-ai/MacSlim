@@ -25,6 +25,12 @@ pub struct HistoryEntry {
     pub fail_count: u64,
     /// 失败原因的错误码（`ErrorCode` 的序列化名）；空串表示没有失败原因。
     pub reason_code: String,
+    /// 成功永久删除的体积之和（缓存主口径）。
+    pub deleted_bytes: u64,
+    /// 移入废纸篓的体积之和（卸载主口径，尚未释放）。
+    pub trashed_bytes: u64,
+    /// 卷可用空间的实测增量；`None` 表示未能测量（区别于 0）。
+    pub reclaimed_bytes: Option<u64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -43,6 +49,30 @@ impl Storage {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
         }
         let conn = Connection::open(&path).map_err(|e| format!("打开 DB 失败: {}", e))?;
+        Self::initialize(&conn)?;
+
+        Ok(Storage {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    /// 测试用：不落盘，避免污染真实 `macslim.db`。
+    #[cfg(test)]
+    pub(crate) fn open_in_memory() -> Result<Self, UserError> {
+        let conn = Connection::open_in_memory().map_err(|e| format!("打开内存 DB 失败: {}", e))?;
+        Self::initialize(&conn)?;
+        Ok(Self::from_connection(conn))
+    }
+
+    /// 测试用：接管一个已就绪的连接（旧库迁移测试）。
+    #[cfg(test)]
+    pub(crate) fn from_connection(conn: Connection) -> Self {
+        Storage {
+            conn: Mutex::new(conn),
+        }
+    }
+
+    fn initialize(conn: &Connection) -> Result<(), UserError> {
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS history (
@@ -58,7 +88,12 @@ impl Storage {
                 item_count INTEGER NOT NULL DEFAULT 0,
                 ok_count INTEGER NOT NULL DEFAULT 0,
                 fail_count INTEGER NOT NULL DEFAULT 0,
-                reason_code TEXT NOT NULL DEFAULT ''
+                reason_code TEXT NOT NULL DEFAULT '',
+                -- 诚实口径：旧 freed_bytes 保留兜底，新列承载可审计的主口径。
+                -- reclaimed_bytes 可空：读不到就是 NULL，绝不伪装 0。
+                reclaimed_bytes INTEGER,
+                deleted_bytes INTEGER NOT NULL DEFAULT 0,
+                trashed_bytes INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_history_ts ON history(timestamp DESC);
 
@@ -73,11 +108,8 @@ impl Storage {
             "#,
         )
         .map_err(|e| format!("初始化 schema 失败: {}", e))?;
-        Self::migrate_history_columns(&conn)?;
-
-        Ok(Storage {
-            conn: Mutex::new(conn),
-        })
+        Self::migrate_history_columns(conn)?;
+        Ok(())
     }
 
     /// 给老库补上后加的结构化列。
@@ -110,6 +142,18 @@ impl Storage {
                 "reason_code",
                 "ALTER TABLE history ADD COLUMN reason_code TEXT NOT NULL DEFAULT ''",
             ),
+            (
+                "reclaimed_bytes",
+                "ALTER TABLE history ADD COLUMN reclaimed_bytes INTEGER",
+            ),
+            (
+                "deleted_bytes",
+                "ALTER TABLE history ADD COLUMN deleted_bytes INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "trashed_bytes",
+                "ALTER TABLE history ADD COLUMN trashed_bytes INTEGER NOT NULL DEFAULT 0",
+            ),
         ] {
             if !existing.iter().any(|c| c == name) {
                 conn.execute(ddl, []).map_err(|e| e.to_string())?;
@@ -130,14 +174,18 @@ impl Storage {
         ok_count: u64,
         fail_count: u64,
         reason_code: &str,
+        deleted_bytes: u64,
+        trashed_bytes: u64,
+        reclaimed_bytes: Option<u64>,
     ) -> Result<i64, UserError> {
         let now = Utc::now().to_rfc3339();
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         c.execute(
             "INSERT INTO history
                (timestamp, operation, target, freed_bytes, success, detail,
-                item_count, ok_count, fail_count, reason_code)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                item_count, ok_count, fail_count, reason_code,
+                reclaimed_bytes, deleted_bytes, trashed_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 now,
                 operation,
@@ -148,7 +196,10 @@ impl Storage {
                 item_count as i64,
                 ok_count as i64,
                 fail_count as i64,
-                reason_code
+                reason_code,
+                reclaimed_bytes.map(|v| v as i64),
+                deleted_bytes as i64,
+                trashed_bytes as i64
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -160,7 +211,8 @@ impl Storage {
         let mut stmt = c
             .prepare(
                 "SELECT id, timestamp, operation, target, freed_bytes, success, detail,
-                        item_count, ok_count, fail_count, reason_code
+                        item_count, ok_count, fail_count, reason_code,
+                        reclaimed_bytes, deleted_bytes, trashed_bytes
                  FROM history ORDER BY id DESC LIMIT ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -182,6 +234,9 @@ impl Storage {
                     ok_count: r.get::<_, i64>(8)? as u64,
                     fail_count: r.get::<_, i64>(9)? as u64,
                     reason_code: r.get(10)?,
+                    reclaimed_bytes: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+                    deleted_bytes: r.get::<_, i64>(12)? as u64,
+                    trashed_bytes: r.get::<_, i64>(13)? as u64,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -253,3 +308,7 @@ fn db_path() -> Result<PathBuf, UserError> {
     let base = dirs::config_dir().ok_or("无法获取配置目录")?;
     Ok(base.join("MacSlim").join("macslim.db"))
 }
+
+#[cfg(test)]
+#[path = "storage_tests.rs"]
+mod tests;
