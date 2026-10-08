@@ -375,6 +375,27 @@ describe("UninstallerView broker flow", () => {
     await screen.findByText("uninstaller.complete");
   });
 
+  it("完成页诚实显示「移入废纸篓 / 尚未释放」，不冒充已释放", async () => {
+    // 卸载只是把文件移进废纸篓，空间**尚未释放**。完成页的绿色 3xl 大数字
+    // 是「释放成功」的视觉语言，会把「待清空的废纸篓」谎报成「已释放」。
+    render(() => <UninstallerView />);
+    await enterResiduePhase();
+    fireEvent.click(
+      screen.getByRole("button", { name: "uninstaller.uninstallSelected" }),
+    );
+    await confirmRun();
+    await screen.findByText("uninstaller.complete");
+
+    // 诚实文案必须在场：已移入废纸篓 / 尚未释放。
+    expect(screen.getByText("result.trashedPending")).toBeTruthy();
+    // 绝不出现「实测释放」的成功措辞。
+    expect(screen.queryByText("result.reclaimed")).toBeNull();
+    // 主数字不得用绿色（释放成功）语言；应为警示色。
+    const bigNumber = screen.getByText("1.3 KB");
+    expect(bigNumber.className).toContain("text-warning-600");
+    expect(bigNumber.className).not.toContain("text-success-600");
+  });
+
   it("shows that the app was removed even when quit failed", async () => {
     mocks.executeOperation.mockResolvedValue(
       uninstallResult("应用拒绝退出信号"),

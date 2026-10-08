@@ -693,11 +693,16 @@ const UninstallerView: Component = () => {
         <CheckCircle2 size={32} class="text-success-600" />
       </div>
       <h2 class="text-lg font-semibold">{t("uninstaller.complete")}</h2>
-      <div class="text-3xl font-bold tabular-nums text-success-600">
+      {/*
+        诚实口径（AGENTS.md §4.1）：这里只是把文件移进废纸篓，空间**尚未释放**，
+        绿色 + 3xl 是「释放成功」的视觉语言，会把待清空的废纸篓谎报成已释放。
+        主数字改用警示色，并用不带尺寸的注脚说明「尚未释放」；尺寸只报一次。
+      */}
+      <div class="text-3xl font-bold tabular-nums text-warning-600">
         {fmtBytes(totalTrashed())}
       </div>
       <div class="text-sm text-zinc-500 space-y-1 text-center">
-        <div>{t("result.trashedPending", { size: fmtBytes(totalTrashed()) })}</div>
+        <div>{t("result.trashedPending")}</div>
         <div>{t("uninstaller.cleanedFiles", { count: totalMoved() })}</div>
         <Show when={totalFailed() > 0}>
           <div class="text-warning-600">{t("uninstaller.failedFiles", { count: totalFailed() })}</div>

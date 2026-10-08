@@ -26,8 +26,9 @@ export const zhCN = {
   // 只说「已删除 / 已移入废纸篓，尚未释放」。
   result: {
     reclaimed: "实测释放 {size}",
-    deletedUnmeasured: "已删除 {count} 项（未能测量释放）",
-    trashedPending: "已移入废纸篓 {size}，尚未释放",
+    // 不带尺寸：完成页的警示色主数字已经展示了体积，这条注脚只负责说明
+    // 「尚未释放」，避免同一体积重复展示。
+    trashedPending: "已移入废纸篓，尚未释放",
   },
 
   // 导航

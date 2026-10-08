@@ -26,8 +26,10 @@ export const en: Dict = {
   // masquerades as freed space — it says "deleted / moved to Trash, not yet freed".
   result: {
     reclaimed: "Measured {size} reclaimed",
-    deletedUnmeasured: "Deleted {count} items (space freed unmeasured)",
-    trashedPending: "Moved to Trash: {size} — not yet freed",
+    // Size-less: the warning-toned hero number on the completion page already
+    // shows the size; this caption only states "not yet freed", so the size
+    // is not shown twice.
+    trashedPending: "Moved to Trash — not yet freed",
   },
 
   nav: {
