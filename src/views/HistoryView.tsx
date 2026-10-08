@@ -193,8 +193,13 @@ const HistoryView: Component<{ active?: boolean }> = (props) => {
                       诚实口径（AGENTS.md §4.1）：新行按结构化字段分三态渲染 ——
                       「实测释放」才配绿色 +；删除但未测量只说「已删除（未测量）」；
                       卸载是移入废纸篓、空间尚未释放，用警示色而非绿色 +。
-                      旧行（item_count === 0）没有结构化字段，回退 freed_bytes，
-                      行为与升级前一致。
+
+                      回退判据是「没有任何结构化口径」，**不能再看 item_count**：
+                      item_count 是更早一次迁移引入的、已随 1.0 发布，而三列口径
+                      字段是这次才加的。1.0 用户升级后，旧行是 item_count > 0 +
+                      freed_bytes > 0，却三列全空；若还依赖 item_count 当新旧判据，
+                      四个分支都不命中，尺寸列会整块空白。故回退只看三列是否全空，
+                      满足时回退 freed_bytes，行为与升级前一致。
                     */}
                     <div class="text-right text-xs text-zinc-500 tabular-nums flex-shrink-0">
                       <Show when={e.item_count > 0 && e.operation === "uninstall" && e.trashed_bytes > 0}>
@@ -226,7 +231,14 @@ const HistoryView: Component<{ active?: boolean }> = (props) => {
                           {t("history.deletedUnmeasured", { size: fmtBytes(e.deleted_bytes) })}
                         </div>
                       </Show>
-                      <Show when={e.item_count === 0 && e.freed_bytes > 0}>
+                      <Show
+                        when={
+                          e.deleted_bytes === 0 &&
+                          e.trashed_bytes === 0 &&
+                          e.reclaimed_bytes == null &&
+                          e.freed_bytes > 0
+                        }
+                      >
                         <div class="font-medium text-success-600">
                           +{fmtBytes(e.freed_bytes)}
                         </div>

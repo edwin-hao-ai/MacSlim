@@ -224,6 +224,30 @@ describe("HistoryView operation labels", () => {
     );
   });
 
+  it("已发布 1.0 的旧行（item_count>0 但三新列为空）仍回退显示 freed_bytes", async () => {
+    // item_count 是更早一次迁移（5021acc）引入的，已包含在已发布 1.0 里；
+    // 而三列诚实口径字段是这次才加的。于是升级上来的 1.0 用户，历史行是
+    // item_count > 0、freed_bytes > 0，却 deleted_bytes=0 / trashed_bytes=0 /
+    // reclaimed_bytes=null。若回退判据还看 item_count，四个分支全不命中，
+    // 尺寸列会整块空白。回退必须只看「有没有结构化口径」，与 item_count 无关。
+    mocks.getHistory.mockResolvedValue([
+      {
+        ...row(1, "cache"),
+        item_count: 3,
+        ok_count: 3,
+        fail_count: 0,
+        freed_bytes: 1300,
+        deleted_bytes: 0,
+        trashed_bytes: 0,
+        reclaimed_bytes: null,
+      },
+    ]);
+    render(() => <HistoryView active />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("+1.3 KB"),
+    );
+  });
+
   it("缓存新行按实测/未测量分口径：实测显示 +，未测量只说已删除", async () => {
     // 未测量（reclaimed_bytes == null）绝不冒充实释放：不出现「+」，
     // 只报「已删除 X（未测量）」。
