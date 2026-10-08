@@ -42,6 +42,10 @@ def _load() -> tuple:
     cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
     cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
     cg.CGEventCreateKeyboardEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+    cg.CGEventCreateScrollWheelEvent.restype = ctypes.c_void_p
+    cg.CGEventCreateScrollWheelEvent.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32
+    ]
     cf.CFRelease.restype = None
     cf.CFRelease.argtypes = [ctypes.c_void_p]
     return cg, cf
@@ -56,6 +60,31 @@ KCG_MOUSE_BUTTON_LEFT = 0
 
 # 常用键的虚拟键码（US 布局，与键盘语言无关）
 KEYCODES = {"return": 36, "enter": 36, "escape": 53, "tab": 48, "space": 49}
+
+
+KCG_SCROLL_UNIT_PIXEL = 0
+KCG_SCROLL_UNIT_LINE = 1
+
+
+def scroll(dy: int) -> None:
+    """滚动一次（像素）。
+
+    为什么需要它：缓存页的列表一长，底部那个「清理」主按钮会被推到视口之外
+    —— 按坐标点不到。之前只能靠「重扫把列表变短」碰运气，不靠谱。
+    正数向下、负数向上。
+    """
+    cg, cf = _load()
+    # 用「行」为单位、分成多次发：一次性发几千像素的 delta 有些应用会忽略，
+    # 而 WebKit 对行单位的处理最稳。
+    steps = max(1, abs(int(dy)) // 5)
+    direction = 1 if dy > 0 else -1
+    for _ in range(steps):
+        event = cg.CGEventCreateScrollWheelEvent(None, KCG_SCROLL_UNIT_LINE, 1, direction * 5)
+        if not event:
+            raise SystemExit("CGEventCreateScrollWheelEvent 失败")
+        cg.CGEventPost(KCG_HID_EVENT_TAP, event)
+        cf.CFRelease(event)
+        time.sleep(0.03)
 
 
 def press(key: str) -> None:
@@ -115,8 +144,16 @@ def press_main() -> None:
     press(sys.argv[2])
 
 
+def scroll_main() -> None:
+    if len(sys.argv) < 3:
+        raise SystemExit("用法: _click.py --scroll <像素，正数向下>")
+    scroll(int(sys.argv[2]))
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--key":
         press_main()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--scroll":
+        scroll_main()
     else:
         main()
