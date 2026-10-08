@@ -65,11 +65,37 @@ async fn execute_operation_routes_uninstall_plan_to_uninstall_domain() {
     let entries = history.entries.lock().unwrap().clone();
     assert_eq!(entries[0].operation, "uninstall");
     assert_eq!(entries[0].target, "1 个应用");
-    // 卸载主口径走 trashed_bytes；本 Task 尚未实测 reclaimed，两者暂同源。
+    // 卸载主口径是 trashed_bytes（文件进了废纸篓，尚未释放）；
+    // freed_bytes 是旧兼容列，仍与 trashed_bytes 同源。
     assert_eq!(entries[0].deleted_bytes, 0);
     assert_eq!(entries[0].trashed_bytes, entries[0].freed_bytes);
+    // 该 fake 未提供实测卷容量，故为 null，而不是 0。
     assert_eq!(entries[0].reclaimed_bytes, None);
     assert!(!entries[0].detail.contains(&prepared.operation_id));
+}
+
+#[test]
+fn uninstall_history_entry_aggregates_measured_reclaimed() {
+    let outcome = OperationOutcome::Uninstall(vec![
+        uninstall_report_with_reclaimed("Alpha", Some(4_000_000)),
+        uninstall_report_with_reclaimed("Beta", Some(1_500_000)),
+    ]);
+
+    let entry = history_entry(&outcome);
+
+    assert_eq!(entry.deleted_bytes, 0);
+    assert_eq!(entry.trashed_bytes, 4_096);
+    assert_eq!(entry.freed_bytes, 4_096);
+    assert_eq!(entry.reclaimed_bytes, Some(5_500_000));
+}
+
+#[test]
+fn uninstall_history_entry_keeps_null_reclaimed_when_unmeasured() {
+    let outcome = OperationOutcome::Uninstall(vec![uninstall_report("Alpha")]);
+
+    let entry = history_entry(&outcome);
+
+    assert_eq!(entry.reclaimed_bytes, None);
 }
 
 #[tokio::test]

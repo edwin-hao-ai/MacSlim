@@ -268,11 +268,18 @@ pub(crate) fn clean_summary() -> CleanSummary {
 }
 
 pub(crate) fn uninstall_report(app_name: &str) -> UninstallReport {
+    uninstall_report_with_reclaimed(app_name, None)
+}
+
+pub(crate) fn uninstall_report_with_reclaimed(
+    app_name: &str,
+    reclaimed_bytes: Option<u64>,
+) -> UninstallReport {
     UninstallReport {
         app_name: app_name.to_owned(),
         bundle_id: format!("com.example.{app_name}"),
         trashed_bytes: 2_048,
-        reclaimed_bytes: None,
+        reclaimed_bytes,
         moved_count: 1,
         failed_count: 0,
         details: vec![MoveResult {
