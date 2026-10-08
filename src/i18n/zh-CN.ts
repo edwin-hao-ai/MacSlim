@@ -224,6 +224,13 @@ export const zhCN = {
     notice: "注意",
   },
 
+  // 缓存页安全筛选 chips
+  safety: {
+    all: "全部",
+    safe: "可安全清理",
+    checkFirst: "需先复核",
+  },
+
   // 破坏性操作错误分类（后端文案 → i18n 提示）
   opError: {
     stale: "操作已失效或快照已更新，请重新扫描后再试：{error}",

@@ -764,3 +764,81 @@ describe("空态必须说实话", () => {
     ).toBeNull();
   });
 });
+
+describe("缓存页安全筛选 chips", () => {
+  // 筛选是纯视图层：只改列表展示，绝不动 selected() / default_select / 门禁。
+  // 夹具：npm 组 1 项 safe（默认勾选），xcode 组 1 项 medium（默认不勾）。
+  beforeEach(resetScanMocks);
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const xcodeLabel = 'cache.item.dockerStoppedContainers:{"count":"3"}';
+
+  const renderScanned = async () => {
+    render(() => <CacheView />);
+    await screen.findByText("cache.item.npmCache");
+  };
+
+  it("三档 chips 显示各自计数", async () => {
+    await renderScanned();
+
+    expect(screen.getByText("safety.all · 2")).toBeTruthy();
+    expect(screen.getByText("safety.safe · 1")).toBeTruthy();
+    expect(screen.getByText("safety.checkFirst · 1")).toBeTruthy();
+  });
+
+  it("点击「可安全清理」只看 safe 项，点击「全部」恢复", async () => {
+    await renderScanned();
+
+    fireEvent.click(screen.getByText("safety.safe · 1"));
+    expect(screen.getByText("cache.item.npmCache")).toBeTruthy();
+    expect(screen.queryByText(xcodeLabel)).toBeNull();
+
+    fireEvent.click(screen.getByText("safety.all · 2"));
+    expect(screen.getByText(xcodeLabel)).toBeTruthy();
+  });
+
+  it("点击「需先复核」只留 low/medium 项", async () => {
+    await renderScanned();
+
+    fireEvent.click(screen.getByText("safety.checkFirst · 1"));
+    expect(screen.getByText(xcodeLabel)).toBeTruthy();
+    expect(screen.queryByText("cache.item.npmCache")).toBeNull();
+  });
+
+  it("⌘1/⌘2/⌘3 切换三档", async () => {
+    await renderScanned();
+
+    fireEvent.keyDown(window, { key: "2", metaKey: true });
+    expect(screen.queryByText(xcodeLabel)).toBeNull();
+
+    fireEvent.keyDown(window, { key: "3", metaKey: true });
+    expect(screen.getByText(xcodeLabel)).toBeTruthy();
+    expect(screen.queryByText("cache.item.npmCache")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    expect(screen.getByText("cache.item.npmCache")).toBeTruthy();
+    expect(screen.getByText(xcodeLabel)).toBeTruthy();
+  });
+
+  it("筛选不改变勾选集合：被筛掉的条目切回来后仍是勾选态", async () => {
+    await renderScanned();
+
+    // 手动勾上默认不选的 xcode（medium）项
+    const boxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(boxes[1]);
+    expect((boxes[1] as HTMLInputElement).checked).toBe(true);
+
+    // 切到只看 safe：xcode 项被隐藏，但不得因此被取消勾选
+    fireEvent.keyDown(window, { key: "2", metaKey: true });
+    expect(screen.queryByText(xcodeLabel)).toBeNull();
+
+    // 切回全部：xcode 复选框依然是勾选态（选择状态未被筛选污染）
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    const restored = await screen.findAllByRole("checkbox");
+    expect((restored[1] as HTMLInputElement).checked).toBe(true);
+  });
+});
+

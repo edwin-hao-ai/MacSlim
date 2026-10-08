@@ -42,6 +42,7 @@ import {
 import CleanupFlash from "@/components/CleanupFlash";
 import FolderAccessCard from "@/components/FolderAccessCard";
 import { can } from "@/lib/flavor";
+import { filterBySafety, type SafetyFilter } from "@/lib/safety";
 import OperationConfirm from "@/components/OperationConfirm";
 import ScanStageProgress from "@/components/ScanStageProgress";
 import { CheckCircle2, Loader2, RefreshCw, Sparkles, XCircle } from "lucide-solid";
@@ -220,6 +221,24 @@ const runScan = async () => {
   };
 
   onMount(runScan);
+
+  // ⌘1/⌘2/⌘3 切换「全部 / 可安全清理 / 需先复核」。纯视图层，不改勾选。
+  const filterByShortcut: Record<string, SafetyFilter> = {
+    "1": "all",
+    "2": "safe",
+    "3": "check",
+  };
+  const onFilterShortcut = (e: KeyboardEvent) => {
+    if (!e.metaKey || e.ctrlKey || e.altKey) return;
+    const next = filterByShortcut[e.key];
+    if (next) {
+      e.preventDefault();
+      setSafetyFilter(next);
+    }
+  };
+  onMount(() => window.addEventListener("keydown", onFilterShortcut));
+  onCleanup(() => window.removeEventListener("keydown", onFilterShortcut));
+
   onCleanup(() => {
     disposed = true;
     releaseAllStageListeners();
@@ -228,6 +247,12 @@ const runScan = async () => {
   });
 
   const items = createMemo<Keyed<CacheItem>[]>(() => snapshot()?.value.items ?? []);
+
+  // 安全筛选是**纯视图层**：只影响列表展示，绝不触碰 selected()（勾选集合）、
+  // default_select（默认勾选）或后端门禁。切筛选只改「看得到哪些」，不改「勾了什么」。
+  const [safetyFilter, setSafetyFilter] = createSignal<SafetyFilter>("all");
+  const safeCount = createMemo(() => items().filter((i) => i.safety === "safe").length);
+  const checkCount = createMemo(() => items().length - safeCount());
 
   const toggle = (key: string) => {
     const next = new Set(selected());
@@ -336,7 +361,7 @@ const runScan = async () => {
 
   const grouped = createMemo(() => {
     const map = new Map<string, Keyed<CacheItem>[]>();
-    for (const item of items()) {
+    for (const item of filterBySafety(items(), safetyFilter())) {
       if (!map.has(item.category)) map.set(item.category, []);
       map.get(item.category)!.push(item);
     }
@@ -512,6 +537,31 @@ const runScan = async () => {
           </Show>
         }
       >
+        <div class="flex items-center gap-2" role="group" aria-label={t("safety.all")}>
+          <For
+            each={[
+              { key: "all" as const, label: t("safety.all"), n: items().length },
+              { key: "safe" as const, label: t("safety.safe"), n: safeCount() },
+              { key: "check" as const, label: t("safety.checkFirst"), n: checkCount() },
+            ]}
+          >
+            {(chip) => (
+              <button
+                type="button"
+                class="px-3 py-1.5 rounded-full text-xs font-medium border transition-colors motion-reduce:transition-none"
+                classList={{
+                  "bg-brand-500 text-white border-brand-500": safetyFilter() === chip.key,
+                  "border-black/10 dark:border-white/15 text-zinc-600 dark:text-zinc-300":
+                    safetyFilter() !== chip.key,
+                }}
+                aria-pressed={safetyFilter() === chip.key}
+                onClick={() => setSafetyFilter(chip.key)}
+              >
+                {chip.label} · {chip.n}
+              </button>
+            )}
+          </For>
+        </div>
         <For each={grouped()}>
           {(group) => (
             <div class="card p-4 animate-fade-in">

@@ -223,6 +223,12 @@ export const en: Dict = {
     notice: "Caution",
   },
 
+  safety: {
+    all: "All",
+    safe: "Safe to Clean",
+    checkFirst: "Check First",
+  },
+
   opError: {
     stale: "The operation expired or the snapshot was refreshed — rescan and try again: {error}",
     history:
