@@ -49,6 +49,9 @@ type HistoryRow = {
   ok_count: number;
   fail_count: number;
   reason_code: string;
+  deleted_bytes: number;
+  trashed_bytes: number;
+  reclaimed_bytes: number | null;
 };
 
 const row = (id: number, operation: string): HistoryRow => ({
@@ -65,6 +68,10 @@ const row = (id: number, operation: string): HistoryRow => ({
   ok_count: 0,
   fail_count: 0,
   reason_code: "",
+  // 旧数据没有诚实口径字段（迁移前默认 0，reclaimed 无从测量）。
+  deleted_bytes: 0,
+  trashed_bytes: 0,
+  reclaimed_bytes: null,
 });
 
 const OPERATIONS = [
@@ -177,6 +184,82 @@ describe("HistoryView operation labels", () => {
     render(() => <HistoryView active />);
     await waitFor(() =>
       expect(document.body.textContent).toContain("目标 7"),
+    );
+  });
+
+  it("卸载新纪录显示移入废纸篓，不显示为释放", async () => {
+    // 卸载只是把文件移进废纸篓，空间**尚未释放**。历史页若照旧显示绿色的
+    // 「+1.3 KB」，等于把「待清空的废纸篓」谎报成「已释放」。
+    mocks.getHistory.mockResolvedValue([
+      {
+        ...row(1, "uninstall"),
+        freed_bytes: 1300,
+        item_count: 1,
+        ok_count: 1,
+        fail_count: 0,
+        reason_code: "",
+        deleted_bytes: 0,
+        trashed_bytes: 1300,
+        reclaimed_bytes: null,
+      },
+    ]);
+    render(() => <HistoryView active />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("废纸篓"),
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("1.3 KB");
+    // 关键：不得出现绿色的「+」释放口径。
+    expect(text).not.toContain("+1.3");
+  });
+
+  it("旧数据行仍显示 freed_bytes，回退行为与升级前一致", async () => {
+    // item_count === 0 是迁移前的旧行，没有结构化口径，保持原来的 +freed_bytes。
+    mocks.getHistory.mockResolvedValue([
+      { ...row(1, "uninstall"), freed_bytes: 1300 },
+    ]);
+    render(() => <HistoryView active />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("+1.3 KB"),
+    );
+  });
+
+  it("缓存新行按实测/未测量分口径：实测显示 +，未测量只说已删除", async () => {
+    // 未测量（reclaimed_bytes == null）绝不冒充实释放：不出现「+」，
+    // 只报「已删除 X（未测量）」。
+    mocks.getHistory.mockResolvedValue([
+      {
+        ...row(1, "cache"),
+        item_count: 2,
+        ok_count: 2,
+        fail_count: 0,
+        deleted_bytes: 2048,
+        trashed_bytes: 0,
+        reclaimed_bytes: null,
+      },
+    ]);
+    render(() => <HistoryView active />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("已删除 2.0 KB（未测量）"),
+    );
+    expect(document.body.textContent).not.toContain("+2.0");
+  });
+
+  it("缓存新行实测到回收量时显示绿色 +", async () => {
+    mocks.getHistory.mockResolvedValue([
+      {
+        ...row(1, "cache"),
+        item_count: 1,
+        ok_count: 1,
+        fail_count: 0,
+        deleted_bytes: 1300,
+        trashed_bytes: 0,
+        reclaimed_bytes: 1300,
+      },
+    ]);
+    render(() => <HistoryView active />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("+1.3 KB"),
     );
   });
 

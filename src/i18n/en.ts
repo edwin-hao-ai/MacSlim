@@ -553,6 +553,11 @@ export const en: Dict = {
       uninstall: "{ok} moved, {fail} failed",
       docker: "{ok} succeeded, {fail} failed",
     },
+    // Right-hand counter column, honest wording (see HistoryView):
+    // uninstall = moved to Trash (space not yet freed, so no green +);
+    // deleted-but-unmeasured = "deleted" only, never claimed as freed.
+    trashed: "{size} → Trash",
+    deletedUnmeasured: "Deleted {size} (unmeasured)",
   },
 
   // Operation summaries (from PreparedOperation.summary_key / summary_params).

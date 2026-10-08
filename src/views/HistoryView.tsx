@@ -189,8 +189,44 @@ const HistoryView: Component<{ active?: boolean }> = (props) => {
                         {opLabel(e.operation)} · {detailText(e)}
                       </div>
                     </div>
+                    {/*
+                      诚实口径（AGENTS.md §4.1）：新行按结构化字段分三态渲染 ——
+                      「实测释放」才配绿色 +；删除但未测量只说「已删除（未测量）」；
+                      卸载是移入废纸篓、空间尚未释放，用警示色而非绿色 +。
+                      旧行（item_count === 0）没有结构化字段，回退 freed_bytes，
+                      行为与升级前一致。
+                    */}
                     <div class="text-right text-xs text-zinc-500 tabular-nums flex-shrink-0">
-                      <Show when={e.freed_bytes > 0}>
+                      <Show when={e.item_count > 0 && e.operation === "uninstall" && e.trashed_bytes > 0}>
+                        <div class="font-medium text-warning-600">
+                          {t("history.trashed", { size: fmtBytes(e.trashed_bytes) })}
+                        </div>
+                      </Show>
+                      <Show
+                        when={
+                          e.item_count > 0 &&
+                          e.operation !== "uninstall" &&
+                          e.reclaimed_bytes != null &&
+                          e.reclaimed_bytes > 0
+                        }
+                      >
+                        <div class="font-medium text-success-600">
+                          +{fmtBytes(e.reclaimed_bytes!)}
+                        </div>
+                      </Show>
+                      <Show
+                        when={
+                          e.item_count > 0 &&
+                          e.operation !== "uninstall" &&
+                          e.reclaimed_bytes == null &&
+                          e.deleted_bytes > 0
+                        }
+                      >
+                        <div class="text-zinc-400">
+                          {t("history.deletedUnmeasured", { size: fmtBytes(e.deleted_bytes) })}
+                        </div>
+                      </Show>
+                      <Show when={e.item_count === 0 && e.freed_bytes > 0}>
                         <div class="font-medium text-success-600">
                           +{fmtBytes(e.freed_bytes)}
                         </div>

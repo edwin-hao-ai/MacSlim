@@ -503,6 +503,11 @@ export const zhCN = {
       uninstall: "移动 {ok} 项，失败 {fail} 项",
       docker: "成功 {ok} 项，失败 {fail} 项",
     },
+    // 右侧计数栏按诚实口径渲染（见 HistoryView）：
+    // 卸载=移入废纸篓（空间尚未释放，不能配绿色 +）；
+    // 删除但未测量=只说「已删除」，绝不冒充实释放。
+    trashed: "{size} → 废纸篓",
+    deletedUnmeasured: "已删除 {size}（未测量）",
   },
 
   // 设置
