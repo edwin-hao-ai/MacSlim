@@ -1,0 +1,11 @@
+{
+  "version": "1.0.1",
+  "notes": "诚实清理报告 + 缓存页安全筛选；清理结果区分实测释放与已删除未测量",
+  "pub_date": "2026-10-09T07:50:23Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUjh1SU5TY251cGU2L3JZT0tBam9aWk95TFhjVWJUNWthOTRZd25waW5pT3JhM1BUWnMyUXlVNy9JLzU1TGYxazZVd0FMRndsTzNHZnY3K2ZTeFd3REU5QUtzZkdySkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTMyMjIzCWZpbGU6TWFjU2xpbV8xLjAuMV9hYXJjaDY0LmFwcC50YXIuZ3oKU1hCQ2xXbTIzQkcrNUxNc25nWThFN0lnQ2FsK2FsWVhxTzBHMlZtRGZmUk9IbDVBdE5xRnpFRzlPODF0bDY2UVlpSk9SNDk4Q3hIZGpaT1pSU1ZVRHc9PQo=",
+      "url": "https://github.com/edwin-hao-ai/MacSlim/releases/download/v1.0.1/MacSlim_1.0.1_aarch64.app.tar.gz"
+    }
+  }
+}

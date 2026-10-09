@@ -17,7 +17,9 @@ src-tauri/target/
 
 # Build artifacts
 docs/downloads/
-docs/updates/
+# 注意：docs/updates/ **不能**忽略 —— updater 的 latest.json 必须提交到仓库，
+# GitHub Pages（源 = main/docs）才会提供 https://edwin-hao-ai.github.io/MacSlim/updates/latest.json。
+# 之前这里把它一起忽略了，导致自更新端点永远 404。
 
 # e2e 门禁产物（截图 + JSON 报告）
 artifacts/

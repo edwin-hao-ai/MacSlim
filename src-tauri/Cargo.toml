@@ -1,6 +1,6 @@
 [package]
 name = "macslim"
-version = "1.0.0"
+version = "1.0.1"
 description = "MacSlim - Mac developer and user system maintenance tool"
 authors = ["Edwin Hao"]
 edition = "2021"
