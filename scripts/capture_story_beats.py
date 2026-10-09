@@ -45,6 +45,13 @@ from pathlib import Path
 
 from PIL import Image
 
+# 用 e2e_driver 的 AX 通道驱动按钮。**不要**再用「按颜色找块 + 投 CGEvent」：
+# 那套的坐标是像素采样推出来的，实测把「清理」主按钮的中心算偏了 ~48px（y 偏小），
+# 点空在按钮上方，于是弹窗永不出现、脚本报「二次确认弹窗没出现」——把方向全带到
+# 「弹窗没渲染」上。而 e2e 门禁（`e2e_driver.Ax.press`，AXPress）在同一台机器上
+# 点「清理」「确认执行」都稳过。AXPress 走的是无障碍通道、坐标来自实时 AX 几何。
+import e2e_driver as _drv
+
 ROOT = Path(__file__).resolve().parents[1]
 # 必须和 _prepare_shot_app.sh 用同一个位置。macOS 上 TMPDIR 指向
 # /var/folders/.../T，写死 /tmp 会和构建脚本产出的副本对不上 ——
@@ -487,17 +494,41 @@ def shoot_granted(out: Path, probe: Path) -> None:
     say("02-scanned：真实列表")
 
 
+def _ax() -> _drv.Ax:
+    return _drv.Ax()
+
+
+def _main_buttons(ax: _drv.Ax, cap: int = 90) -> list:
+    return [n for n in ax.children(_drv.P_MAIN, cap=cap) if n.role == "AXButton"]
+
+
+def _wait_dialog(ax: _drv.Ax, timeout: float) -> bool:
+    """等确认弹窗挂上：判据是「取消」与「确认…」两个按钮同时出现。
+
+    `prepareOperation` 走后端往返（实测 2~2.5s），必须轮询；弹窗按钮挂在组件树
+    末尾（实测下标 39/40），所以 cap 要给到 90，否则读不到。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        titles = {n.title for n in _main_buttons(ax)}
+        if "取消" in titles and any(t.startswith("确认") for t in titles):
+            return True
+        time.sleep(0.4)
+    return False
+
+
 def shoot_confirm(out: Path, probe: Path) -> None:
-    """第三拍：二次确认弹窗。"""
-    if not click_button("清理"):
-        point = find_color_block(capture(probe), is_teal, CLEAN_BUTTON_REGION)
-        if point is None:
-            fail("找不到清理主按钮")
-        click_point(point)
-    time.sleep(4)
-    image = capture(out / "03-confirm.png")
-    if find_color_block(image, is_confirm_red, CONFIRM_DIALOG_REGION) is None:
+    """第三拍：二次确认弹窗。用 AXPress 打开（见文件顶部关于坐标点击的说明）。"""
+    ax = _ax()
+    cta = ax.main_button("清理 ")
+    if cta is None or cta.disabled:
+        fail("找不到可用的「清理 …」主按钮")
+    if not ax.press(cta.path, why="打开确认弹窗"):
+        fail("AXPress「清理」失败")
+    if not _wait_dialog(ax, 15):
         fail("二次确认弹窗没出现")
+    time.sleep(1)
+    capture(out / "03-confirm.png")
     say("03-confirm：二次确认弹窗")
 
 
@@ -509,11 +540,12 @@ def wait_fixture_gone(timeout: int = 40) -> None:
 
 def shoot_cleaned(out: Path, probe: Path) -> None:
     """第四拍：清理完成 —— 并核对它是真的删掉了，不只是界面变了。"""
-    if not click_button("确认执行"):
-        point = find_color_block(capture(probe), is_confirm_red, CONFIRM_DIALOG_REGION)
-        if point is None:
-            fail("找不到「确认执行」按钮")
-        click_point(point)
+    ax = _ax()
+    go = next((n for n in _main_buttons(ax) if n.title.startswith("确认") and not n.disabled), None)
+    if go is None:
+        fail("找不到「确认执行」按钮")
+    if not ax.press(go.path, why="确认清理"):
+        fail("AXPress「确认执行」失败")
 
     wait_fixture_gone()
     remaining = fixture_files()
